@@ -48,6 +48,17 @@ export class SupabaseAdapter {
 
   async signOut() { await this.sb.auth.signOut(); }
 
+  /** Đổi mật khẩu qua Supabase Auth: xác thực mật khẩu hiện tại (đăng nhập lại chính tài khoản đang dùng) rồi mới đổi. */
+  async changePassword(current, next) {
+    const s = await this.getSession();
+    if (!s?.user?.email) throw new Error('Chưa đăng nhập');
+    const chk = await this.sb.auth.signInWithPassword({ email: s.user.email, password: current });
+    if (chk.error) { const e = new Error(chk.error.message); e.code = chk.error.code === 'invalid_credentials' || /invalid login/i.test(chk.error.message) ? 'wrong_current' : chk.error.code; throw e; }
+    if (chk.data.user?.id !== s.user.id) throw new Error('Tài khoản không khớp phiên đăng nhập');
+    const { error } = await this.sb.auth.updateUser({ password: next });
+    if (error) { const e = new Error(error.message); e.code = error.code; throw e; }
+  }
+
   async profile() {
     const s = await this.getSession();
     if (!s) return null;
@@ -102,7 +113,7 @@ export class SupabaseAdapter {
         .on('postgres_changes', { event: '*', schema: 'v2' }, (p) => onChange(p.table))
         .subscribe((status) => onStatus?.(status));
     });
-    this.sb.auth.onAuthStateChange((ev, s) => { if (s?.access_token && ev === 'TOKEN_REFRESHED') this.sb.realtime.setAuth(s.access_token); });
+    this.sb.auth.onAuthStateChange((ev, s) => { if (s?.access_token && ['TOKEN_REFRESHED', 'SIGNED_IN', 'USER_UPDATED'].includes(ev)) this.sb.realtime.setAuth(s.access_token); });
     return () => { stopped = true; if (ch) this.sb.removeChannel(ch); };
   }
 

@@ -1,7 +1,8 @@
 import { html } from '../ui/html.js';
 import { icon } from '../ui/icons.js';
 import { mascot, logo, cageArt } from '../ui/brand.js';
-import { field, options, showMessages, formValues, busy, toast, confirmDialog, empty, badge } from '../ui/components.js';
+import { field, options, showMessages, formValues, busy, toast, confirmDialog, empty, badge, openSheet } from '../ui/components.js';
+import { validatePasswordChange, passwordErrorMessage, PASSWORD_MIN } from '../domain/account.js';
 import { ROLES } from '../data/store.js';
 import { buildDemo, DEMO_LABEL, DEFAULT_TASKS } from '../data/seed.js';
 import { processImage } from '../services/images.js';
@@ -53,7 +54,7 @@ export function renderSettings(app) {
       ${demo ? html`<div class="card"><div class="card-title">${icon('users')} Vai trò (chế độ demo)</div>
         <p class="small muted">Trong bản demo, bạn tự chọn vai trò để thử giao diện theo quyền. Đây KHÔNG phải cơ chế bảo mật. Khi chạy với Supabase, quyền do đăng nhập thật + RLS phía database quyết định.</p>
         <div class="btn-row">${Object.entries(ROLES).map(([k, l]) => html`<button class="btn ${s.role === k ? 'primary' : 'soft'} sm" data-role="${k}">${l}</button>`)}</div></div>`
-        : html`<div class="card"><div class="card-title">${icon('users')} Tài khoản</div><p>${s.user?.name} · ${ROLES[s.role]}</p><button class="btn ghost" data-logout>${icon('logout')} Đăng xuất</button></div>
+        : html`<div class="card"><div class="card-title">${icon('users')} Tài khoản</div><p>${s.user?.name} · ${ROLES[s.role]}</p><div class="btn-row"><button class="btn soft" data-change-pw>${icon('shield')} Đổi mật khẩu</button><button class="btn ghost" data-logout>${icon('logout')} Đăng xuất</button></div></div>
         <div class="card"><div class="card-title">${icon('refresh')} Kết nối Supabase staging</div>
           <p class="small muted">Dự án: <b>${s.adapter.ref}</b>. Dữ liệu tự đồng bộ giữa các thiết bị (Realtime) và tải lại khi mở lại app.</p>
           <div class="btn-row"><button class="btn soft" data-sync-now>${icon('refresh')} Đồng bộ ngay</button><button class="btn soft" data-diag>${icon('shield')} Kiểm tra kết nối</button></div>
@@ -93,6 +94,7 @@ export function renderSettings(app) {
           await s.adapter.replaceAll(buildDemo(s.today()));
           await s.load(); toast('Đã tạo lại dữ liệu demo'); app.navigate('#/');
         }
+        if (e.target.closest('[data-change-pw]')) { openChangePassword(app); return; }
         if (e.target.closest('[data-logout]')) { await s.adapter.signOut(); location.reload(); }
         if (e.target.closest('[data-sync-now]')) { try { await s.reload(); toast('Đã đồng bộ'); } catch (err) { toast(err.message, 'error'); } }
         const dg = e.target.closest('[data-diag],[data-diag-upload]');
@@ -210,6 +212,45 @@ export function renderPublic(app) {
 export function mountPublic(root, app) {
   root.querySelector('[data-back-owner]')?.addEventListener('click', () => { setDemoRole('owner'); app.store.user = demoUser(); location.hash = '#/'; app.render(); });
   root.querySelector('[data-login]')?.addEventListener('click', () => renderLogin(app));
+}
+
+/** Đổi mật khẩu (Chủ trại & Nhân viên tự đổi) — xác thực mật khẩu hiện tại qua Supabase Auth, app không lưu mật khẩu. */
+function openChangePassword(app) {
+  const email = app.store.user?.email || '';
+  openSheet({
+    title: 'Đổi mật khẩu', subtitle: email, size: 'small',
+    body: html`<form class="form" data-pw autocomplete="on">
+      <input type="text" name="username" autocomplete="username" value="${email}" hidden readonly>
+      ${field('Mật khẩu hiện tại', html`<input type="password" name="current" autocomplete="current-password" required>`)}
+      ${field('Mật khẩu mới', html`<input type="password" name="next" autocomplete="new-password" minlength="${PASSWORD_MIN}" required>`, `Ít nhất ${PASSWORD_MIN} ký tự, khác mật khẩu hiện tại.`)}
+      ${field('Nhập lại mật khẩu mới', html`<input type="password" name="confirm" autocomplete="new-password" required>`)}
+      <label class="check"><input type="checkbox" data-show-pw> Hiện mật khẩu</label>
+      <div class="form-msg" data-msg></div></form>`,
+    footer: html`<button class="btn ghost" data-close>Huỷ</button><button class="btn primary" data-save>${icon('check')} Đổi mật khẩu</button>`,
+    onMount: (el) => {
+      const form = el.querySelector('[data-pw]'); const msg = el.querySelector('[data-msg]'); const btn = el.querySelector('[data-save]');
+      el.querySelector('[data-show-pw]').addEventListener('change', (e) => form.querySelectorAll('input[type=password],input[data-pw-shown]').forEach((i) => { i.type = e.target.checked ? 'text' : 'password'; i.toggleAttribute('data-pw-shown', e.target.checked); }));
+      const submit = async () => {
+        const v = formValues(form);
+        const errs = validatePasswordChange(v);
+        if (errs.length) { showMessages(msg, errs); return; }
+        await busy(btn, async () => {
+          try {
+            await app.store.adapter.changePassword(v.current, v.next);
+            form.reset();
+            el.querySelector('.sheet-body').innerHTML = String(html`<div class="msg ok" role="status" data-pw-done>${icon('check')}<div><b>Đã đổi mật khẩu thành công.</b><br>Máy này vẫn đăng nhập. Các thiết bị khác đang dùng tài khoản này sẽ phải đăng nhập lại bằng mật khẩu mới.</div></div>`);
+            el.querySelector('.sheet-foot').innerHTML = String(html`<button class="btn primary block" data-close>Đóng</button>`);
+            toast('Đã đổi mật khẩu');
+          } catch (err) {
+            showMessages(msg, [passwordErrorMessage(err)]);
+            if (err?.code === 'wrong_current') { form.current.value = ''; form.current.focus(); }
+          }
+        }, 'Đang đổi…');
+      };
+      btn.addEventListener('click', submit);
+      form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+    },
+  });
 }
 
 /** Đăng nhập thật (chỉ dùng ở chế độ Supabase). */

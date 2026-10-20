@@ -183,7 +183,7 @@ async function boot() {
       store.user = more.demoUser();
     } else {
       const p = await adapter.profile();
-      store.user = p ? { id: p.id, name: p.display_name || p.email, role: p.role } : null;
+      store.user = p ? { id: p.id, name: p.display_name || p.email, role: p.role, email: p.email } : null;
     }
     const app = new App(store, cfg);
     window.__yp = app; // hỗ trợ kiểm thử tự động
