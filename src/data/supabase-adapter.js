@@ -117,11 +117,11 @@ export class SupabaseAdapter {
     return () => { stopped = true; if (ch) this.sb.removeChannel(ch); };
   }
 
-  /** Chẩn đoán kết nối (Cài đặt → Kiểm tra kết nối staging). Không ghi dữ liệu nghiệp vụ. */
+  /** Chẩn đoán kết nối (Cài đặt → Công cụ kỹ thuật → Kiểm tra kết nối). Không ghi dữ liệu nghiệp vụ. */
   async diagnose({ testUpload = false, isOwner = false } = {}) {
     const res = [];
     const add = (name, ok, detail = '') => res.push({ name, ok, detail });
-    add('URL & khoá hợp lệ, đúng dự án staging', true, `${this.ref}${this.configWarnings.length ? ' · ' + this.configWarnings.join(' ') : ''}`);
+    add('URL & khoá hợp lệ, đúng dự án V2', true, `${this.ref}${this.configWarnings.length ? ' · ' + this.configWarnings.join(' ') : ''}`);
     const s = await this.getSession();
     add('Đã đăng nhập', !!s, s?.user?.email || 'chưa đăng nhập');
     if (!s) return res;

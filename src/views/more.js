@@ -8,6 +8,7 @@ import { ROLES } from '../data/store.js';
 import { buildDemo, DEMO_LABEL, DEFAULT_TASKS } from '../data/seed.js';
 import { processImage } from '../services/images.js';
 import { lowStockItems } from '../domain/inventory.js';
+import { primaryMenuRoutes } from '../domain/menu.js';
 import { fmtDate, fmtDateTime } from '../core/dates.js';
 import { bytes, toInt } from '../core/format.js';
 
@@ -41,8 +42,13 @@ export function renderMenu(app) {
     s.can('audit.read') && ['#/audit', 'shield', 'Nhật ký thay đổi', 'Audit trail dữ liệu quan trọng', ''],
     ['#/settings', 'settings', 'Cài đặt', 'Ngưỡng cảnh báo, vai trò, ảnh', ''],
   ].filter(Boolean);
+  const primary = primaryMenuRoutes(s.db);
+  const main = items.filter(([href]) => primary[href] !== false);
+  const rare = items.filter(([href]) => primary[href] === false);
+  const grid = (list) => html`<div class="menu-grid">${list.map(([href, ic, t, d, tone]) => html`<a class="menu-item" href="${href}"><span class="row-icon ${tone}">${icon(ic)}</span>${t}<small>${d}</small></a>`)}</div>`;
   return { html: html`<div class="page-head"><div class="grow"><h1>Thêm</h1><div class="sub">Các chức năng khác</div></div></div>
-    <div class="menu-grid">${items.map(([href, ic, t, d, tone]) => html`<a class="menu-item" href="${href}"><span class="row-icon ${tone}">${icon(ic)}</span>${t}<small>${d}</small></a>`)}</div>` };
+    ${grid(main)}
+    ${rare.length ? html`<details class="adv" style="margin-top:12px" data-rare-menu><summary>Chức năng ít dùng (${rare.length})</summary>${grid(rare)}</details>` : ''}` };
 }
 
 export function renderSettings(app) {
@@ -56,11 +62,9 @@ export function renderSettings(app) {
         <p class="small muted">Trong bản demo, bạn tự chọn vai trò để thử giao diện theo quyền. Đây KHÔNG phải cơ chế bảo mật. Khi chạy với Supabase, quyền do đăng nhập thật + RLS phía database quyết định.</p>
         <div class="btn-row">${Object.entries(ROLES).map(([k, l]) => html`<button class="btn ${s.role === k ? 'primary' : 'soft'} sm" data-role="${k}">${l}</button>`)}</div></div>`
         : html`<div class="card"><div class="card-title">${icon('users')} Tài khoản</div><p>${s.user?.name} · ${ROLES[s.role]}</p><div class="btn-row"><button class="btn soft" data-change-pw>${icon('shield')} Đổi mật khẩu</button><button class="btn ghost" data-logout>${icon('logout')} Đăng xuất</button></div></div>
-        <div class="card"><div class="card-title">${icon('refresh')} Kết nối Supabase staging</div>
-          <p class="small muted">Dự án: <b>${s.adapter.ref}</b>. Dữ liệu tự đồng bộ giữa các thiết bị (Realtime) và tải lại khi mở lại app.</p>
-          <div class="btn-row"><button class="btn soft" data-sync-now>${icon('refresh')} Đồng bộ ngay</button><button class="btn soft" data-diag>${icon('shield')} Kiểm tra kết nối</button></div>
-          <button class="btn ghost block" style="margin-top:8px" data-diag-upload>${icon('camera')} Kiểm tra kèm tải ảnh thử</button>
-          <div data-diag-out></div></div>`}
+        <div class="card"><div class="card-title">${icon('refresh')} Đồng bộ dữ liệu</div>
+          <p class="small muted">Dữ liệu tự đồng bộ giữa các thiết bị và tải lại khi mở lại app.</p>
+          <div class="btn-row"><button class="btn soft" data-sync-now>${icon('refresh')} Đồng bộ ngay</button></div></div>`}
 
       <div class="card"><div class="card-title">${icon('alert')} Ngưỡng cảnh báo</div>
         <form class="form" data-th>
@@ -70,10 +74,6 @@ export function renderSettings(app) {
           ${owner ? html`<button class="btn primary" type="submit">${icon('check')} Lưu ngưỡng</button>` : html`<p class="small muted">Chỉ chủ trại được thay đổi.</p>`}
           <div class="form-msg" data-msg></div></form></div>
 
-      <div class="card"><div class="card-title">${icon('camera')} Đo tốc độ tối ưu ảnh</div>
-        <p class="small muted">Chọn 1 ảnh chụp từ điện thoại để so sánh dung lượng & thời gian tải trước/sau tối ưu. Ảnh chỉ xử lý trên máy, không tải lên.</p>
-        <label class="btn soft block"><input type="file" accept="image/*" hidden data-bench>${icon('image')} Chọn ảnh để đo</label>
-        <div data-bench-out></div></div>
 
       ${demo ? html`<div class="card"><div class="card-title">${icon('refresh')} Dữ liệu demo</div>
         <p class="small muted">${DEMO_LABEL}. Lưu trong trình duyệt của máy này (IndexedDB), không gửi đi đâu.</p>
@@ -84,8 +84,15 @@ export function renderSettings(app) {
         <label class="btn soft block" style="margin-top:8px"><input type="file" accept="application/json,.json" hidden data-import-json>${icon('download')} Nạp file JSON dữ liệu cũ (xem thử cục bộ)</label></div>` : ''}
 
       <div class="card"><div class="card-title">${icon('info')} Thông tin phiên bản</div><dl class="kv">
-        <dt>Phiên bản</dt><dd>2.0.0-staging</dd><dt>Chế độ dữ liệu</dt><dd>${demo ? 'DEMO (IndexedDB trên máy)' : 'Supabase staging'}</dd>
-        <dt>Số bản ghi</dt><dd>${Object.entries(s.db).filter(([, v]) => v.length).map(([k, v]) => `${k}: ${v.length}`).join(' · ')}</dd></dl></div>`,
+        <dt>Phiên bản</dt><dd>2.0</dd><dt>Chế độ dữ liệu</dt><dd>${demo ? 'DEMO (IndexedDB trên máy)' : 'Máy chủ Supabase'}</dd></dl>
+        <details class="adv" style="margin-top:10px" data-tech><summary>Công cụ kỹ thuật</summary>
+          ${demo ? '' : html`<p class="small muted">Dự án: <b>${s.adapter.ref}</b></p>
+          <div class="btn-row"><button class="btn soft" data-diag>${icon('shield')} Kiểm tra kết nối</button><button class="btn ghost" data-diag-upload>${icon('camera')} Kiểm tra kèm tải ảnh thử</button></div>
+          <div data-diag-out></div>`}
+          <p class="small muted" style="margin-top:10px">Đo tốc độ tối ưu ảnh: chọn 1 ảnh để so sánh dung lượng & thời gian tải trước/sau tối ưu. Ảnh chỉ xử lý trên máy, không tải lên.</p>
+          <label class="btn soft block"><input type="file" accept="image/*" hidden data-bench>${icon('image')} Chọn ảnh để đo</label>
+          <div data-bench-out></div>
+          <dl class="kv" style="margin-top:10px"><dt>Số bản ghi</dt><dd>${Object.entries(s.db).filter(([, v]) => v.length).map(([k, v]) => `${k}: ${v.length}`).join(' · ')}</dd></dl></details></div>`,
     mount(root) {
       root.addEventListener('click', async (e) => {
         const r = e.target.closest('[data-role]');
