@@ -5,13 +5,18 @@ import { badge, openSheet, field, showMessages, formValues, busy, toast, confirm
 import { fmtDate, fmtDateTime } from '../core/dates.js';
 import { isOpenAction, canEditNote, planEditNote, planResolveNote, notesOfCage, NOTE_MAX } from '../domain/notes.js';
 
-const edited = (n) => n.updated_at && n.created_at && Date.parse(n.updated_at) - Date.parse(n.created_at) > 5000 && !n.resolved_at;
+// Ghi chú nhập từ V1 giữ created_at gốc của V1, updated_at = lúc nhập ⇒ so với lúc nhập (settings v1_import) thay vì created_at
+const edited = (store, n) => {
+  if (!n.updated_at || !n.created_at || n.resolved_at) return false;
+  const since = n.legacy_log_note ? Date.parse(store.db.settings.find((s) => s.id === 'v1_import')?.value?.converted_at || n.created_at) + 15 * 60e3 : Date.parse(n.created_at);
+  return Date.parse(n.updated_at) - since > 5000;
+};
 
 /** Dòng tiêu đề: ngày · người viết · trạng thái "Cần xử lý" / "Đã xử lý". */
 function head(store, n) {
   const who = store.userName(n.created_by);
   return html`<div class="note-head">${icon('note')}<span class="date">${fmtDate(n.note_date)}</span>${who ? html`<span class="who">· ${who}</span>` : ''}
-    ${edited(n) ? html`<span class="who">· đã sửa</span>` : ''}
+    ${edited(store, n) ? html`<span class="who">· đã sửa</span>` : ''}
     ${isOpenAction(n) ? badge('Cần xử lý', 'danger') : n.needs_action && n.resolved_at ? badge(`Đã xử lý${store.userName(n.resolved_by) ? ` · ${store.userName(n.resolved_by)}` : ''}`, 'ok') : ''}</div>`;
 }
 

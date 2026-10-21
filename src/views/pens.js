@@ -3,7 +3,7 @@ import { icon } from '../ui/icons.js';
 import { cageArt } from '../ui/brand.js';
 import { openSheet, field, options, showMessages, formValues, busy, toast, confirmDialog, empty, badge } from '../ui/components.js';
 import { MOVEMENT_TYPES, penBalance, penLedger, planMovement, planDeleteMovement } from '../domain/stock.js';
-import { currentPair } from '../domain/breeding.js';
+import { currentPair, byCageCode } from '../domain/breeding.js';
 import { fmtDate, fmtDateTime } from '../core/dates.js';
 import { toInt } from '../core/format.js';
 import { openDailyForm } from './breeding-forms.js';
@@ -100,7 +100,7 @@ export function openMovementForm(app, { type, penId, movement = null }) {
   const s = app.store;
   const P = pens(s);
   const penOpts = (sel) => options(Object.fromEntries(P.map((p) => [p.id, `${p.name} (còn ${penBalance(s.db.stock_movements, p.id)})`])), sel);
-  const cagesWithPair = s.db.cages.filter((c) => !c.archived).sort((a, b) => a.code.localeCompare(b.code));
+  const cagesWithPair = s.db.cages.filter((c) => !c.archived).sort(byCageCode);
   const m = movement;
   let t = m?.type || type;
   const titles = { in_breeding: 'Nhập từ lồng sinh sản', in_other: 'Nhập khác', transfer: 'Chuyển giữa lồng phóng', loss: 'Ghi nhận hao hụt', adjust_out: 'Điều chỉnh kiểm đếm', adjust_in: 'Điều chỉnh kiểm đếm' };

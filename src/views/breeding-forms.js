@@ -5,7 +5,7 @@ import { photoPickerHtml, mountPhotoPicker, photosReady } from '../ui/photo-pick
 import {
   SNAPSHOT_FIELDS, PARENT_STATUS, NEST_STATUS, planDailySave, planCloseClutch, planStartRest, planUpdateRest,
   planDeleteLog, planEditClutchStart, clutchForDate, logsOfClutch, pickSnapshot, snapshotDelta, describeDelta,
-  clutchSummary, currentPair, validateSnapshot,
+  clutchSummary, currentPair, validateSnapshot, planCageSave,
 } from '../domain/breeding.js';
 import { fmtDate, addDays, isISODate } from '../core/dates.js';
 import { toInt } from '../core/format.js';
@@ -287,22 +287,14 @@ export function openCageForm(app, cageId) {
   openSheet({
     title: c ? `Thông tin lồng ${c.code}` : 'Thêm lồng sinh sản',
     body: html`<form class="form" data-f>
-      <div class="grid2">${field('Mã lồng', html`<input name="code" value="${c?.code || ''}" placeholder="VD: L17" required>`)}
-        ${field('Thứ tự', html`<input type="number" name="sort" value="${c?.sort ?? store.db.cages.length + 1}" inputmode="numeric">`)}</div>
-      ${field('Ghi chú lồng', html`<input name="note" value="${c?.note || ''}" placeholder="Vị trí, loại lồng…">`)}
+      ${field('Mã lồng *', html`<input name="code" value="${c?.code || ''}" placeholder="VD: L25" maxlength="30" required autocomplete="off">`, 'Danh sách lồng tự sắp xếp theo mã.')}
+      ${field('Ghi chú lồng (không bắt buộc)', html`<input name="note" value="${c?.note || ''}" placeholder="Vị trí, loại lồng…">`)}
       ${c ? html`<label class="check"><input type="checkbox" name="archived" ${c.archived ? 'checked' : ''}> Lưu trữ (ẩn khỏi danh sách & thống kê)</label>` : ''}
       <div class="form-msg" data-msg></div></form>`,
     footer: html`<button class="btn ghost" data-close>Huỷ</button><button class="btn primary" data-save>${icon('check')} Lưu</button>`,
     onMount: (el, close) => el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => {
-      const v = formValues(el.querySelector('[data-f]'));
-      const code = v.code.trim();
-      const errs = [];
-      if (!code) errs.push('Nhập mã lồng');
-      if (store.db.cages.some((x) => x.id !== c?.id && x.code.toLowerCase() === code.toLowerCase())) errs.push('Mã lồng đã tồn tại');
-      if (c && !c.archived && v.archived && (store.db.clutches.some((x) => x.cage_id === c.id && x.status !== 'closed') || currentPair(store.db.pairs, c.id))) errs.push('Lồng còn cặp hoặc lứa đang mở — không thể lưu trữ');
-      if (errs.length) return showMessages(el.querySelector('[data-msg]'), errs);
-      const now = new Date().toISOString();
-      const rec = { ...(c || { id: uid(), created_at: now }), code, name: `Lồng ${code}`, sort: toInt(v.sort, 0), note: v.note.trim(), archived: !!v.archived, updated_at: now };
+      const { errors, record: rec } = planCageSave(formValues(el.querySelector('[data-f]')), store.db, { existing: c });
+      if (errors.length) return showMessages(el.querySelector('[data-msg]'), errors);
       const r = await store.run({ ops: [{ table: 'cages', op: 'put', record: rec, before: c }] }, { requires: 'settings.write' });
       if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);
       toast('Đã lưu lồng'); close();

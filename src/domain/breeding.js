@@ -275,6 +275,29 @@ export function clutchChecks(clutch, summary, db, today, settings = DEFAULT_SETT
 }
 
 /** Trạng thái tổng hợp của 1 lồng sinh sản để hiển thị thẻ. */
+/** Sắp xếp lồng theo MÃ (tự nhiên: L2 < L10). Cột sort cũ không còn dùng để sắp xếp. */
+export const byCageCode = (a, b) => String(a.code || '').localeCompare(String(b.code || ''), 'vi', { numeric: true, sensitivity: 'base' });
+
+/**
+ * Thêm / sửa lồng sinh sản. Chỉ bắt buộc Mã lồng; ghi chú tuỳ chọn; thứ tự hiển thị tự theo mã.
+ * Sửa lồng có sẵn: chỉ đổi trường người dùng sửa — giữ nguyên tên / sort / dữ liệu khác (lồng chuyển từ V1).
+ */
+export function planCageSave(input, db, { now = new Date().toISOString(), existing = null } = {}) {
+  const code = String(input.code || '').trim();
+  const note = String(input.note || '').trim();
+  const archived = existing ? !!input.archived : false;
+  const errors = [];
+  if (!code) errors.push('Nhập mã lồng');
+  else if (code.length > 30) errors.push('Mã lồng tối đa 30 ký tự');
+  if (code && db.cages.some((x) => x.id !== existing?.id && !x.deleted && String(x.code).toLowerCase() === code.toLowerCase())) errors.push('Mã lồng đã tồn tại');
+  if (existing && !existing.archived && archived && (db.clutches.some((x) => x.cage_id === existing.id && x.status !== 'closed' && !x.deleted) || currentPair(db.pairs, existing.id))) errors.push('Lồng còn cặp hoặc lứa đang mở — không thể lưu trữ');
+  if (errors.length) return { errors, record: null };
+  const record = existing
+    ? { ...existing, code, name: code === existing.code ? existing.name : `Lồng ${code}`, note, archived, updated_at: now }
+    : { id: uid(), code, name: `Lồng ${code}`, sort: Number(code.replace(/\D/g, '')) || 0, note, archived: false, created_at: now, updated_at: now };
+  return { errors: [], record };
+}
+
 export function cageState(cage, db, today, settings = DEFAULT_SETTINGS) {
   const pair = currentPair(db.pairs, cage.id);
   const clutch = openClutch(db.clutches, cage.id);

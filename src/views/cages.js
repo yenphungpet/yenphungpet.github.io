@@ -7,7 +7,7 @@ import { fmtDate, fmtDateShort, fmtDateTime, relativeDays, daysBetween } from '.
 import { fmtPct, matches } from '../core/format.js';
 import { openDailyForm, openCloseClutch, openRestForm, openCageForm, openNoPairNotice, openEditClutchStart } from './breeding-forms.js';
 import { openPairSheet } from './pairing-sheet.js';
-import { currentPair } from '../domain/breeding.js';
+import { currentPair, byCageCode } from '../domain/breeding.js';
 import { openHealthForm } from './health.js';
 import { noteBlock, noteList, bindNoteActions } from './notes-ui.js';
 import { notesOfLog } from '../domain/notes.js';
@@ -119,7 +119,7 @@ export function renderList(app, _p, query) {
   const today = s.today();
   const f = FILTERS.some(([k]) => k === query.f) ? query.f : 'all';
   const q = query.q || '';
-  const states = s.db.cages.filter((c) => !c.archived && !c.deleted).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.code.localeCompare(b.code))
+  const states = s.db.cages.filter((c) => !c.archived && !c.deleted).sort(byCageCode)
     .map((c) => cageState(c, s.db, today, s.settings));
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, states.filter(filterFn[k]).length]));
   const list = states.filter(filterFn[f]).filter((x) => matches(q, x.cage.code, x.cage.name, s.birdName(x.pair?.male_id), s.birdName(x.pair?.female_id), x.note?.text));
@@ -156,7 +156,12 @@ export function logCard(store, log, prev, { editable = true, today } = {}) {
     ${noteList(store, notesOfLog(store.db, log))}
     ${log.legacy && log.legacy.eggs_in_nest !== undefined ? html`<div class="small num muted">Số liệu gốc V1: ${log.legacy.eggs_in_nest} trứng đang trong tổ · ${log.legacy.chicks} chim non · ${log.legacy.bad} hỏng${log.legacy.fertile != null ? ` · ${log.legacy.fertile} có cồ` : ''}</div>` : ''}
     ${log.photo_ids?.length ? html`<div class="thumbs">${log.photo_ids.map((id) => thumb(id))}</div>` : ''}
-    ${/^https:\/\//.test(log.legacy_photo_url || '') ? html`<div class="thumbs"><a class="thumb" href="${log.legacy_photo_url}" target="_blank" rel="noopener noreferrer"><img src="${log.legacy_photo_url}" alt="Ảnh từ V1" loading="lazy" referrerpolicy="no-referrer"></a></div>` : ''}
+    ${(() => {
+      // Ảnh V1 của nhật ký + ảnh riêng của bản ghi khác cùng ngày (V1 cho ghi nhiều lần / ngày — xem legacy.same_day)
+      const urls = [log.legacy_photo_url, ...(log.legacy?.same_day || []).filter((x) => !x.identical).map((x) => x.data?.img)]
+        .filter((u, i, a) => /^https:\/\//.test(u || '') && a.indexOf(u) === i);
+      return urls.length ? html`<div class="thumbs">${urls.map((u, i) => html`<a class="thumb" href="${u}" target="_blank" rel="noopener noreferrer"><img src="${u}" alt="${i ? 'Ảnh V1 — bản ghi khác cùng ngày' : 'Ảnh từ V1'}" loading="lazy" referrerpolicy="no-referrer"></a>`)}</div>` : '';
+    })()}
     <div class="tl-meta">Tạo ${fmtDateTime(log.created_at)}${log.version ? html` · <b>đã sửa ${log.version} lần</b>, lần cuối ${fmtDateTime(log.updated_at)}` : ''}</div>
   </div>`;
 }

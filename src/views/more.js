@@ -3,6 +3,7 @@ import { icon } from '../ui/icons.js';
 import { mascot, logo, cageArt } from '../ui/brand.js';
 import { field, options, showMessages, formValues, busy, toast, confirmDialog, empty, badge, openSheet } from '../ui/components.js';
 import { validatePasswordChange, passwordErrorMessage, PASSWORD_MIN } from '../domain/account.js';
+import { TASK_GROUPS, planTaskAdd, planTaskEdit, planTaskDelete } from '../domain/checklist.js';
 import { ROLES } from '../data/store.js';
 import { buildDemo, DEMO_LABEL, DEFAULT_TASKS } from '../data/seed.js';
 import { processImage } from '../services/images.js';
@@ -178,13 +179,60 @@ export function renderChecklist(app) {
   const n = row.tasks.filter((t) => done[t.id]).length;
   const groups = [...new Set(row.tasks.map((t) => t.group))];
   const canW = s.can('checklist.write');
+  const canEdit = s.can('settings.write'); // như V1: chỉ chủ trại sửa danh sách công việc
   return {
-    html: html`<div class="page-head"><a class="back" href="#/more">${icon('back')}</a><div class="grow"><h1>Checklist hôm nay</h1><div class="sub">${fmtDate(today)} · ${n}/${row.tasks.length} việc</div></div></div>
+    html: html`<div class="page-head"><a class="back" href="#/more">${icon('back')}</a><div class="grow"><h1>Checklist hôm nay</h1><div class="sub">${fmtDate(today)} · ${n}/${row.tasks.length} việc</div></div>
+        ${canEdit ? html`<button class="btn soft sm" data-task-add>${icon('plus')} Công việc</button>` : ''}</div>
       <div class="progress" style="margin-bottom:12px"><i style="width:${row.tasks.length ? (n / row.tasks.length) * 100 : 0}%"></i></div>
       ${groups.map((g) => html`<div class="section"><h2>${g}</h2></div><div class="card"><div class="list">${row.tasks.filter((t) => t.group === g).map((t) => html`
-        <label class="row" style="cursor:pointer"><input type="checkbox" data-task="${t.id}" ${done[t.id] ? 'checked' : ''} ${canW ? '' : 'disabled'} style="width:24px;height:24px;accent-color:var(--teal-600)">
-        <span class="grow"><span class="title" style="${done[t.id] ? 'text-decoration:line-through;color:var(--ink-3)' : ''}">${t.title}</span><br><span class="desc">${t.time}</span></span></label>`)}</div></div>`)}`,
+        <div class="row"><label class="grow" style="display:flex;gap:12px;align-items:center;cursor:pointer"><input type="checkbox" data-task="${t.id}" ${done[t.id] ? 'checked' : ''} ${canW ? '' : 'disabled'} style="width:24px;height:24px;accent-color:var(--teal-600)">
+        <span class="grow"><span class="title" style="${done[t.id] ? 'text-decoration:line-through;color:var(--ink-3)' : ''}">${t.title}</span><br><span class="desc">${t.time}</span></span></label>
+        ${canEdit ? html`<button type="button" class="btn ghost sm" data-task-edit="${t.id}" aria-label="Sửa ${t.title}">${icon('edit')}</button>` : ''}</div>`)}</div></div>`)}`,
     mount(root) {
+      const save = async (record, msg) => {
+        const r = await s.run({ ops: [{ table: 'checklist', op: 'put', record: { ...record, created_at: record.created_at || new Date().toISOString() } }] }, { requires: 'settings.write' });
+        if (!r.ok) return r.errors;
+        toast(msg); app.render(); return null;
+      };
+      const openTask = (task) => {
+        const cur = s.db.checklist.find((c) => c.id === 'tasks') || row;
+        const groupsNow = [...new Set([...TASK_GROUPS, ...cur.tasks.map((t) => t.group)])];
+        openSheet({
+          title: task ? 'Sửa công việc' : 'Thêm công việc', size: 'small',
+          body: html`<form class="form" data-tf>
+            ${field('Tên công việc *', html`<input name="title" value="${task?.title || ''}" maxlength="80" required>`)}
+            <div class="grid2">${field('Buổi *', html`<select name="group">${options(Object.fromEntries(groupsNow.map((g) => [g, g])), task?.group || 'Sáng')}</select>`)}
+              ${field('Giờ (tuỳ chọn)', html`<input type="time" name="time" value="${task && task.time !== '—' ? task.time : ''}">`)}</div>
+            ${task ? html`<p class="small muted">Xoá công việc chỉ bỏ khỏi danh sách; lịch sử đánh dấu các ngày trước vẫn giữ.</p>` : ''}
+            <div class="form-msg" data-msg></div></form>`,
+          footer: html`${task ? html`<button class="btn danger" data-del>${icon('trash')} Xoá</button>` : html`<button class="btn ghost" data-close>Huỷ</button>`}<button class="btn primary" data-save>${icon('check')} Lưu</button>`,
+          onMount: (el, close) => {
+            const msg = el.querySelector('[data-msg]');
+            el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+              const latest = s.db.checklist.find((c) => c.id === 'tasks') || row;
+              const v = formValues(el.querySelector('[data-tf]'));
+              const p = task ? planTaskEdit(latest, task.id, v) : planTaskAdd(latest, v);
+              if (p.errors.length) return showMessages(msg, p.errors);
+              const err = await save(p.record, task ? 'Đã sửa công việc' : 'Đã thêm công việc');
+              if (err) return showMessages(msg, err);
+              close();
+            }));
+            el.querySelector('[data-del]')?.addEventListener('click', async () => {
+              if (!(await confirmDialog(`Xoá "${task.title}" khỏi checklist?`, { danger: true, ok: 'Xoá' }))) return;
+              const p = planTaskDelete(s.db.checklist.find((c) => c.id === 'tasks') || row, task.id);
+              const err = p.errors.length ? p.errors : await save(p.record, 'Đã xoá công việc');
+              if (err) return showMessages(msg, err);
+              close();
+            });
+          },
+        });
+      };
+      root.querySelector('[data-task-add]')?.addEventListener('click', () => openTask(null));
+      root.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-task-edit]'); if (!b) return;
+        e.preventDefault();
+        openTask((s.db.checklist.find((c) => c.id === 'tasks') || row).tasks.find((t) => t.id === b.dataset.taskEdit));
+      });
       root.addEventListener('change', async (e) => {
         const id = e.target.dataset.task; if (!id) return;
         const cur = s.db.checklist.find((c) => c.id === 'tasks') || row;
