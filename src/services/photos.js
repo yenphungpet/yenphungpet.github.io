@@ -70,11 +70,22 @@ export async function photoUrl(store, photoId, size = 'thumb') {
   return url;
 }
 
-/** Gắn src cho mọi <img data-photo="id" data-size="thumb|full"> trong vùng root (tải lười). */
-export function hydratePhotos(store, root) {
-  root.querySelectorAll('img[data-photo]:not([data-ready])').forEach(async (img) => {
-    img.dataset.ready = '1';
+/** Gắn src cho mọi <img data-photo="id" data-size="thumb|full"> trong vùng root. Supabase: ký link mọi ảnh trong MỘT yêu cầu. */
+export async function hydratePhotos(store, root) {
+  const imgs = [...root.querySelectorAll('img[data-photo]:not([data-ready])')];
+  if (!imgs.length) return;
+  imgs.forEach((img) => { img.dataset.ready = '1'; });
+  const keyOf = (img) => { const p = store.byId('photos', img.dataset.photo); return p ? (img.dataset.size === 'full' ? p.full_key : p.thumb_key) : null; };
+  if (store.adapter.photoUrls) {
+    const keys = imgs.map(keyOf).filter((k) => k && !urlCache.has(k));
+    if (keys.length) {
+      try { for (const [k, u] of Object.entries(await store.adapter.photoUrls(keys))) urlCache.set(k, u); } catch { /* hiện "Không tải được ảnh" bên dưới */ }
+    }
+    for (const img of imgs) { const u = urlCache.get(keyOf(img)); if (u) img.src = u; else img.alt = 'Không tải được ảnh'; }
+    return;
+  }
+  await Promise.all(imgs.map(async (img) => {
     const url = await photoUrl(store, img.dataset.photo, img.dataset.size || 'thumb');
     if (url) img.src = url; else img.alt = 'Không tải được ảnh';
-  });
+  }));
 }

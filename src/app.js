@@ -77,12 +77,27 @@ function parseHash() {
   return { path: path || '/', query: Object.fromEntries(new URLSearchParams(qs || '')) };
 }
 
+const userOf = (p) => (p ? { id: p.id, name: p.display_name || p.email, role: p.role, email: p.email } : null);
+
 export class App {
   constructor(store, cfg) {
     this.store = store;
     this.cfg = cfg;
     this.root = document.getElementById('app');
     this.lastPath = null;
+  }
+
+  async open() {
+    await this.store.load();
+    this.store.startSync();
+    this.render();
+  }
+
+  /** Vừa đăng nhập xong: nạp vai trò + dữ liệu ngay trên trang (trước đây tải lại cả trang ⇒ tải lại toàn bộ mã). */
+  async signedIn() {
+    this.store.user = userOf(await this.store.adapter.profile({ prefetch: true }));
+    if (!this.store.user) { location.reload(); return; }
+    await this.open();
   }
 
   navigate(hash) { if (location.hash === hash) this.render(); else location.hash = hash; }
@@ -130,6 +145,7 @@ export class App {
     view.mount?.(main);
     hydratePhotos(this.store, main);
     window.scrollTo(0, samePage ? y : 0);
+    enableFonts();
   }
 
   bindGlobal() {
@@ -146,6 +162,10 @@ export class App {
     window.addEventListener('unhandledrejection', (e) => { console.error(e.reason); toast(`Lỗi: ${e.reason?.message || e.reason}`, 'error'); });
   }
 }
+
+// Font Be Vietnam Pro (index.html: media="print" ⇒ không tải lúc đầu) chỉ bật SAU khi màn hình đầu tiên đã vẽ:
+// trên mạng chậm, ~170 KB font không còn tranh băng thông với mã + dữ liệu. Trong lúc chờ chữ hiện bằng font hệ thống.
+const enableFonts = () => document.querySelector('link[data-font][media=print]')?.setAttribute('media', 'all');
 
 async function boot() {
   const cfg = window.YP_CONFIG || { mode: 'demo' };
@@ -182,16 +202,13 @@ async function boot() {
       }
       store.user = more.demoUser();
     } else {
-      const p = await adapter.profile();
-      store.user = p ? { id: p.id, name: p.display_name || p.email, role: p.role, email: p.email } : null;
+      store.user = userOf(await adapter.profile({ prefetch: true }));
     }
     const app = new App(store, cfg);
     window.__yp = app; // hỗ trợ kiểm thử tự động
     app.bindGlobal();
-    if (!store.user) { more.renderLogin(app); return; }
-    await store.load();
-    store.startSync();
-    app.render();
+    if (!store.user) { more.renderLogin(app); enableFonts(); return; }
+    await app.open();
   } catch (e) {
     console.error(e);
     el.innerHTML = String(html`<div class="login-wrap card"><div class="msg error">${icon('alert')} Không khởi động được ứng dụng: ${e.message}</div>

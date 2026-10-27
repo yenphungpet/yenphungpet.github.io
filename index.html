@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://cynpwmjkflhlrdqxoyhx.supabase.co https://res.cloudinary.com; connect-src 'self' https://cynpwmjkflhlrdqxoyhx.supabase.co wss://cynpwmjkflhlrdqxoyhx.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://cynpwmjkflhlrdqxoyhx.supabase.co https://res.cloudinary.com; connect-src 'self' https://cynpwmjkflhlrdqxoyhx.supabase.co wss://cynpwmjkflhlrdqxoyhx.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0F5C5A">
@@ -13,11 +13,55 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap">
+<!-- Font tải KHÔNG chặn hiển thị / chạy mã (media=print; src/app.js bật sau khi vẽ màn hình đầu); chữ hiện bằng font hệ thống trong lúc chờ -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;600;700;800&display=swap" media="print" data-font>
 <link rel="stylesheet" href="assets/app.css">
 <!-- V2 chạy song song với V1, dữ liệu riêng (Supabase cynpwmjkflhlrdqxoyhx). V2 là app quản lý trại chính thức từ 21/10/2026; V1 giữ nguyên để tra cứu. -->
-
 <script src="config.js"></script>
+<link rel="preload" as="script" href="vendor/supabase-js-2.45.4.umd.js">
+<link rel="modulepreload" href="src/app.js">
+<link rel="modulepreload" href="src/core/dates.js">
+<link rel="modulepreload" href="src/core/format.js">
+<link rel="modulepreload" href="src/core/ids.js">
+<link rel="modulepreload" href="src/data/idb-adapter.js">
+<link rel="modulepreload" href="src/data/schema.js">
+<link rel="modulepreload" href="src/data/seed.js">
+<link rel="modulepreload" href="src/data/store.js">
+<link rel="modulepreload" href="src/data/supabase-adapter.js">
+<link rel="modulepreload" href="src/data/supabase-config.js">
+<link rel="modulepreload" href="src/domain/account.js">
+<link rel="modulepreload" href="src/domain/breeders.js">
+<link rel="modulepreload" href="src/domain/breeding.js">
+<link rel="modulepreload" href="src/domain/checklist.js">
+<link rel="modulepreload" href="src/domain/dashboard.js">
+<link rel="modulepreload" href="src/domain/finance.js">
+<link rel="modulepreload" href="src/domain/health.js">
+<link rel="modulepreload" href="src/domain/inventory.js">
+<link rel="modulepreload" href="src/domain/menu.js">
+<link rel="modulepreload" href="src/domain/notes.js">
+<link rel="modulepreload" href="src/domain/pairing.js">
+<link rel="modulepreload" href="src/domain/sales.js">
+<link rel="modulepreload" href="src/domain/stock.js">
+<link rel="modulepreload" href="src/services/images.js">
+<link rel="modulepreload" href="src/services/photos.js">
+<link rel="modulepreload" href="src/ui/brand.js">
+<link rel="modulepreload" href="src/ui/components.js">
+<link rel="modulepreload" href="src/ui/html.js">
+<link rel="modulepreload" href="src/ui/icons.js">
+<link rel="modulepreload" href="src/ui/photo-picker.js">
+<link rel="modulepreload" href="src/views/breeders.js">
+<link rel="modulepreload" href="src/views/breeding-forms.js">
+<link rel="modulepreload" href="src/views/cages.js">
+<link rel="modulepreload" href="src/views/dashboard.js">
+<link rel="modulepreload" href="src/views/finance.js">
+<link rel="modulepreload" href="src/views/health.js">
+<link rel="modulepreload" href="src/views/inventory.js">
+<link rel="modulepreload" href="src/views/more.js">
+<link rel="modulepreload" href="src/views/notes-ui.js">
+<link rel="modulepreload" href="src/views/pairing-sheet.js">
+<link rel="modulepreload" href="src/views/pens.js">
+<link rel="modulepreload" href="src/views/performance.js">
+<link rel="modulepreload" href="src/views/sales.js">
 <script type="module" src="src/app.js"></script>
 </head>
 <body>

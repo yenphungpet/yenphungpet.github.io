@@ -12,9 +12,27 @@
 import { TABLES, emptyDb } from './schema.js';
 import { checkSupabaseConfig } from './supabase-config.js';
 
-const SUPABASE_JS = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
+// supabase-js tự lưu trữ cùng trang (= gói npm @supabase/supabase-js@2.45.4, dist/umd/supabase.js, sha256 8596965f…01e7).
+// Trước đây nạp từ jsDelivr bản "+esm": 3 tầng import nối tiếp trên một tên miền khác ⇒ chậm trên 4G/3G.
+const SUPABASE_JS = 'vendor/supabase-js-2.45.4.umd.js';
 const BUCKET = 'farm-photos';
-const PAGE = 1000;
+const PAGE = 1000; // giới hạn số dòng / yêu cầu của máy chủ (PostgREST max-rows)
+const RANGE = 900;
+const PAGES_HINT = 'yp.pages'; // localStorage: CHỈ số trang của mỗi bảng (không chứa dữ liệu) để lần sau tải các trang song song
+
+function loadSupabaseJs() {
+  if (window.supabase?.createClient) return Promise.resolve(window.supabase);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = SUPABASE_JS;
+    s.onload = () => (window.supabase?.createClient ? resolve(window.supabase) : reject(new Error('Không nạp được thư viện Supabase')));
+    s.onerror = () => reject(new Error('Không tải được thư viện Supabase — kiểm tra kết nối mạng'));
+    document.head.append(s);
+  });
+}
+
+function readPagesHint() { try { return JSON.parse(localStorage.getItem(PAGES_HINT) || '{}') || {}; } catch { return {}; } }
+function savePagesHint(h) { try { localStorage.setItem(PAGES_HINT, JSON.stringify(h)); } catch { /* chế độ riêng tư */ } }
 
 export class SupabaseAdapter {
   constructor(cfg) {
@@ -29,7 +47,7 @@ export class SupabaseAdapter {
   }
 
   async init() {
-    const { createClient } = await import(SUPABASE_JS);
+    const { createClient } = await loadSupabaseJs();
     this.sb = createClient(this.cfg.url, this.cfg.anonKey, { auth: { persistSession: true, autoRefreshToken: true } });
     // Toàn bộ bảng V2 nằm trong schema riêng (không đụng bảng cũ ở "public")
     this.v2 = this.sb.schema(this.cfg.schema || 'v2');
@@ -59,14 +77,21 @@ export class SupabaseAdapter {
     if (error) { const e = new Error(error.message); e.code = error.code; throw e; }
   }
 
-  async profile() {
+  /** prefetch: bắt đầu tải dữ liệu NGAY, song song với đọc vai trò (lúc mở app) — lấy kết quả bằng takePrefetch(). */
+  async profile({ prefetch = false } = {}) {
     const s = await this.getSession();
     if (!s) return null;
-    const { data, error } = await this.v2.from('profiles').select('id, display_name, role').eq('id', s.user.id).maybeSingle();
-    if (error) throw new Error(error.message);
-    this.role = data?.role || 'public';
-    return data ? { ...data, email: s.user.email } : { id: s.user.id, role: 'public', email: s.user.email };
+    this._profileP = (async () => {
+      const { data, error } = await this.v2.from('profiles').select('id, display_name, role').eq('id', s.user.id).maybeSingle();
+      if (error) throw new Error(error.message);
+      this.role = data?.role || 'public';
+      return data ? { ...data, email: s.user.email } : { id: s.user.id, role: 'public', email: s.user.email };
+    })();
+    if (prefetch) { this._prefetch = this.loadAll(); this._prefetch.catch(() => {}); }
+    return this._profileP;
   }
+
+  takePrefetch() { const p = this._prefetch; this._prefetch = null; return p; }
 
   /** Tên hiển thị { id: display_name } — chủ trại đọc tất cả; thành viên đọc được từ migration 0011. */
   async loadProfiles() {
@@ -75,24 +100,59 @@ export class SupabaseAdapter {
     return Object.fromEntries((data || []).map((p) => [p.id, p.display_name || '']));
   }
 
-  async loadAll() {
-    const out = emptyDb();
-    await Promise.all(TABLES.filter((t) => t !== 'audit_log').map(async (t) => {
-      let from = 0;
+  /**
+   * Đọc trọn một bảng theo khoá (keyset, sắp theo id). Bảng > 1000 dòng: chia thành các khoảng id theo ranh giới nhớ từ lần trước
+   * và đọc các khoảng SONG SONG (trước đây trang 2 phải chờ trang 1). Mỗi dòng thuộc đúng một khoảng ⇒ không sót, không trùng,
+   * kể cả khi có dòng được thêm / xoá trong lúc tải. Khoảng nào còn > 1000 dòng thì đọc tiếp tuần tự trong khoảng đó.
+   */
+  async loadTable(t, hint) {
+    const readRange = async (lo, hi) => {
+      const rows = [];
+      let after = null;
       for (;;) {
-        const { data, error } = await this.v2.from(t).select('*').order('id').range(from, from + PAGE - 1);
+        let q = this.v2.from(t).select('*').order('id').limit(PAGE);
+        if (lo != null) q = q.gte('id', lo);
+        if (after != null) q = q.gt('id', after);
+        if (hi != null) q = q.lt('id', hi);
+        const { data, error } = await q;
         if (error) {
           // Bảng không có quyền đọc theo vai trò => để trống (RLS phía server là nguồn sự thật)
-          if (error.code === '42501' || /permission/i.test(error.message)) break;
+          if (error.code === '42501' || /permission/i.test(error.message)) return null;
           // Bảng mới chưa có trên server (VD inventory_costs trước migration 0009) => để trống, app vẫn chạy
-          if (error.code === 'PGRST205' || error.code === '42P01') break;
+          if (error.code === 'PGRST205' || error.code === '42P01') return null;
           throw new Error(`Không tải được ${t}: ${error.message}`);
         }
-        out[t].push(...data);
-        if (data.length < PAGE) break;
-        from += PAGE;
+        rows.push(...data);
+        if (data.length < PAGE) return rows;
+        after = data[data.length - 1].id;
       }
-    }));
+    };
+    const bounds = (Array.isArray(hint?.[t]) ? hint[t] : []).filter((x) => typeof x === 'string').slice(0, 20);
+    const edges = [null, ...bounds, null];
+    const parts = await Promise.all(edges.slice(0, -1).map((lo, i) => readRange(lo, edges[i + 1])));
+    if (parts.some((p) => !p)) return [];
+    const rows = parts.flat();
+    // Ranh giới mỗi 900 dòng (< 1000): mỗi khoảng vừa 1 yêu cầu, còn chỗ cho dữ liệu mới tới lần tải sau
+    if (hint) hint[t] = rows.length > PAGE ? rows.filter((_, i) => i && i % RANGE === 0).map((r) => r.id) : [];
+    return rows;
+  }
+
+  /** Tải lại chỉ một số bảng (khi Realtime báo bảng đó thay đổi). */
+  async loadTables(tables) {
+    const hint = readPagesHint();
+    const out = {};
+    await Promise.all(tables.filter((t) => TABLES.includes(t) && t !== 'audit_log').map(async (t) => { out[t] = await this.loadTable(t, hint); }));
+    savePagesHint(hint);
+    return out;
+  }
+
+  async loadAll() {
+    const out = emptyDb();
+    const hint = readPagesHint();
+    await Promise.all(TABLES.filter((t) => t !== 'audit_log').map(async (t) => { out[t] = await this.loadTable(t, hint); }));
+    savePagesHint(hint);
+    // Vai trò có thể đang được đọc song song (profile() chạy cùng lúc với loadAll())
+    if (this._profileP) await this._profileP.catch(() => {});
     // Đối chiếu dấu dự án do STEP1 ghi: database phải đúng là dự án staging trong URL
     const mark = out.settings.find((x) => x.id === 'deploy');
     if (!['owner', 'staff'].includes(this.role)) return out; // chưa có vai trò: RLS không cho đọc settings — chỉ xem trang công khai
@@ -184,11 +244,25 @@ export class SupabaseAdapter {
   }
 
   async photoUrl(key) {
-    const c = this.urlCache.get(key);
-    if (c && c.exp > Date.now()) return c.url;
-    const { data, error } = await this.sb.storage.from(BUCKET).createSignedUrl(key, 3600);
-    if (error) return null;
-    this.urlCache.set(key, { url: data.signedUrl, exp: Date.now() + 3300 * 1000 });
-    return data.signedUrl;
+    return (await this.photoUrls([key]))[key] || null;
+  }
+
+  /** Link xem ảnh có hạn cho NHIỀU ảnh trong MỘT yêu cầu (trước đây mỗi ảnh một yêu cầu). Trả { key: url }. */
+  async photoUrls(keys) {
+    const out = {};
+    const need = [];
+    for (const k of new Set(keys)) {
+      const c = this.urlCache.get(k);
+      if (c && c.exp > Date.now()) out[k] = c.url; else need.push(k);
+    }
+    if (need.length) {
+      const { data, error } = await this.sb.storage.from(BUCKET).createSignedUrls(need, 3600);
+      if (!error) for (const d of data || []) {
+        if (d.error || !d.signedUrl) continue;
+        out[d.path] = d.signedUrl;
+        this.urlCache.set(d.path, { url: d.signedUrl, exp: Date.now() + 3300 * 1000 });
+      }
+    }
+    return out;
   }
 }

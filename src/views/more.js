@@ -163,6 +163,12 @@ export function renderSettings(app) {
 export function renderAudit(app, _p, query) {
   const s = app.store;
   const t = query.t || '';
+  // Supabase: nhật ký thay đổi không tải lúc mở app — tải khi mở trang này (xong sẽ tự vẽ lại)
+  if (s.adapter.loadAudit && !s.auditLoaded) {
+    s.ensureAudit();
+    return { html: html`<div class="page-head"><a class="back" href="#/more">${icon('back')}</a><div class="grow"><h1>Nhật ký thay đổi</h1></div></div>
+      <div class="empty"><span class="spinner"></span><p>Đang tải nhật ký thay đổi…</p></div>` };
+  }
   const list = s.db.audit_log.filter((a) => !t || a.table_name === t).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 300);
   const tables = [...new Set(s.db.audit_log.map((a) => a.table_name))].sort();
   const LABEL = { insert: 'Tạo mới', update: 'Sửa', delete: 'Xoá' };
@@ -325,7 +331,7 @@ export function renderLogin(app) {
       try {
         const v = formValues(e.target);
         await app.store.adapter.signIn(v.email, v.password);
-        location.reload();
+        await app.signedIn();
       } catch (err) { showMessages(e.target.querySelector('[data-msg]'), [`Đăng nhập thất bại: ${err.message}`]); }
     }, 'Đang đăng nhập…');
   });

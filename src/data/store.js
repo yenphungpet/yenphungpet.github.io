@@ -25,14 +25,27 @@ export class Store {
 
   async load() {
     this.setStatus('loading', 'Đang tải dữ liệu…');
-    this.db = await this.adapter.loadAll();
-    await this.loadProfiles();
-    // Supabase: audit do trigger ghi, chỉ chủ trại đọc được (RLS) — tải riêng
-    if (this.adapter.loadAudit && this.can('audit.read')) {
-      try { this.db.audit_log = await this.adapter.loadAudit(300); } catch { this.db.audit_log = []; }
-    }
+    // Dữ liệu (có thể đã bắt đầu tải song song với đọc vai trò — adapter.profile({ prefetch })) + tên người dùng: cùng lúc
+    const [db] = await Promise.all([this.adapter.takePrefetch?.() || this.adapter.loadAll(), this.loadProfiles()]);
+    this.db = db;
     this.setStatus('ok', this.adapter.kind === 'demo' ? 'Dữ liệu DEMO trên máy này' : 'Đã đồng bộ');
     this.emit();
+  }
+
+  /**
+   * Nhật ký thay đổi (Supabase: do trigger ghi, chỉ chủ trại đọc được — RLS). Chỉ trang "Nhật ký thay đổi" dùng
+   * ⇒ tải khi mở trang đó, không tải lúc mở app (≈300 KB). Demo: audit nằm sẵn trong db.
+   */
+  async ensureAudit() {
+    if (!this.adapter.loadAudit || !this.can('audit.read')) return;
+    if (this.auditLoaded) return;
+    this._auditP ||= (async () => {
+      try { this.db.audit_log = await this.adapter.loadAudit(300); } catch { this.db.audit_log = []; }
+      this.auditLoaded = true;
+      this._auditP = null;
+      this.emit();
+    })();
+    return this._auditP;
   }
 
   /** Đồng bộ giữa thiết bị: Realtime (nếu adapter hỗ trợ) + tải lại khi quay lại app sau ≥ 20 giây. */
@@ -40,14 +53,20 @@ export class Store {
     if (this._syncing || this.adapter.kind === 'demo') return;
     this._syncing = true;
     this.lastLoad = Date.now();
-    const schedule = () => {
-      clearTimeout(this._reloadT);
-      this._reloadT = setTimeout(async () => {
-        if (this.status.state === 'saving') return schedule();
-        try { await this.reload(); } catch (e) { this.setStatus('error', `Mất đồng bộ: ${e.message}`); }
-      }, 700);
+    // Realtime cho biết BẢNG nào đổi ⇒ chỉ tải lại các bảng đó. Mở lại app / có mạng lại: có thể đã lỡ sự kiện ⇒ tải lại tất cả.
+    let changed = new Set(); let full = false;
+    const flush = async () => {
+      if (this.status.state === 'saving') { this._reloadT = setTimeout(flush, 700); return; }
+      const tables = full || !this.adapter.loadTables ? null : [...changed];
+      changed = new Set(); full = false;
+      try { await this.reload(tables); } catch (e) { this.setStatus('error', `Mất đồng bộ: ${e.message}`); }
     };
-    this._unsub = this.adapter.subscribe?.(() => schedule(), (st) => {
+    const schedule = (table) => {
+      if (table) changed.add(table); else full = true;
+      clearTimeout(this._reloadT);
+      this._reloadT = setTimeout(flush, 700);
+    };
+    this._unsub = this.adapter.subscribe?.((table) => schedule(table), (st) => {
       this.realtime = st;
       if (st === 'SUBSCRIBED') this.setStatus('ok', 'Đồng bộ trực tiếp');
       if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') this.setStatus('error', 'Mất kết nối trực tiếp — sẽ tải lại khi mở lại app');
@@ -58,18 +77,24 @@ export class Store {
     window.addEventListener('online', () => schedule());
   }
 
-  async reload() {
+  /** tables: chỉ tải lại các bảng này (Realtime báo đổi); bỏ trống = tải lại tất cả. */
+  async reload(tables = null) {
     // Chống race: nếu có thao tác ghi xảy ra trong lúc đang tải, kết quả tải đã cũ => bỏ, tải lại lần nữa
     const seq = this.writeSeq || 0;
-    const db = await this.adapter.loadAll();
-    if (this.adapter.loadAudit && this.can('audit.read')) { try { db.audit_log = await this.adapter.loadAudit(300); } catch { db.audit_log = []; } }
+    const audit = this.auditLoaded && (!tables || tables.includes('audit_log'));
+    const [part, auditRows] = await Promise.all([
+      tables ? this.adapter.loadTables(tables) : this.adapter.loadAll(),
+      audit ? this.adapter.loadAudit(300).catch(() => []) : null,
+      !tables || tables.includes('profiles') ? this.loadProfiles() : null,
+    ]);
     if ((this.writeSeq || 0) !== seq || this.status.state === 'saving') {
       clearTimeout(this._staleT);
-      this._staleT = setTimeout(() => this.reload().catch(() => {}), 400);
+      this._staleT = setTimeout(() => this.reload(tables).catch(() => {}), 400);
       return;
     }
+    const db = tables ? { ...this.db, ...part } : part;
+    db.audit_log = audit ? auditRows : (this.db.audit_log || []);
     this.db = db;
-    await this.loadProfiles();
     this.lastLoad = Date.now();
     this.setStatus('ok', `Đã đồng bộ ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`);
     this.emit();
