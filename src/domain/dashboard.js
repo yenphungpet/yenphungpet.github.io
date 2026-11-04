@@ -17,10 +17,15 @@ export const METRIC_DEFS = {
   activeCages: 'Lồng có lứa đang mở (chờ trứng, đang ấp, nuôi con hoặc chờ kết thúc lứa).',
   resting: 'Lồng có kỳ nghỉ đẻ đang mở (đã xác nhận ngày bắt đầu nghỉ).',
   eggs: 'Trứng đang theo dõi = Σ (đã đẻ − đã nở − hỏng − không cồ) của các lứa đang mở.',
-  chicks: 'Σ chim non hiện tại của các lứa đang mở (chim còn trong lồng sinh sản).',
+  chicks: 'Σ chim non hiện tại của các lứa đang mở + nhóm chim non nhận từ lồng khác (chim còn trong lồng sinh sản).',
   pen: 'Tồn hiện tại theo sổ biến động của lồng phóng.',
   breederPen: 'Số cá thể đang ở Lồng Chim Giống (trạng thái “Trong Lồng Chim Giống”). Không gồm chim đang ghép — số “đang ghép ở lồng SS” bên dưới là bố mẹ thuộc cặp đang mở của lồng sinh sản đang dùng (2 con mỗi cặp).',
   checks: 'Đối chiếu tự động, không sửa dữ liệu: ra ràng ↔ nhập lồng phóng, đã nở ≠ chim non hiện tại + ra ràng (cần đối chiếu — không tự suy ra chết/mất), trứng chờ quá lâu, nhật ký mâu thuẫn, số cộng dồn giảm, trạng thái chim lệch với cặp ghép.',
+};
+
+const groupSum = (db, states, kind) => {
+  const live = new Set(states.map((s) => s.cage.id));
+  return (db.brood_groups || []).filter((g) => g.kind === kind && g.status === 'active' && live.has(g.cage_id)).reduce((a, g) => a + (Number(g.qty) || 0), 0);
 };
 
 export function dashboardMetrics(db, today, settings = DEFAULT_SETTINGS) {
@@ -33,8 +38,9 @@ export function dashboardMetrics(db, today, settings = DEFAULT_SETTINGS) {
     cages: cages.length,
     activeCages: states.filter((s) => s.clutch).length,
     resting: states.filter((s) => s.rest.state === 'resting').length,
-    eggs: states.reduce((a, s) => a + (s.summary ? s.summary.pending : 0), 0),
-    chicks: states.reduce((a, s) => a + (s.summary ? s.summary.chicks : 0), 0),
+    // + nhóm trứng / chim non nhận từ lồng khác (V2.1, 0012) — không nằm trong nhật ký lứa nên không bị cộng 2 lần
+    eggs: states.reduce((a, s) => a + (s.summary ? s.summary.pending : 0), 0) + groupSum(db, states, 'egg'),
+    chicks: states.reduce((a, s) => a + (s.summary ? s.summary.chicks : 0), 0) + groupSum(db, states, 'chick'),
     pens: pens.map((p) => ({ pen: p, qty: penBalance(db.stock_movements, p.id) })),
     breeders: breederStats(db.birds, db),
     month: summarize(monthTx),

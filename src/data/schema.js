@@ -6,6 +6,8 @@ export const TABLES = [
   'customers', 'orders', 'payments', 'transactions',
   'inventory_items', 'inventory_movements', 'inventory_costs', 'cage_notes',
   'photos', 'checklist', 'audit_log', 'settings', 'listings',
+  // V2.1 (0012): nhóm trứng / chim non — chỉ đọc trực tiếp; ghi qua RPC v2.brood_*. Server chưa có bảng ⇒ tải về rỗng.
+  'brood_groups', 'brood_events',
 ];
 
 // Bảng quan trọng cần ghi audit trail khi sửa/xoá

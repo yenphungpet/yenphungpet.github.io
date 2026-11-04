@@ -161,6 +161,16 @@ export class SupabaseAdapter {
     return out;
   }
 
+  /** Thời điểm sửa mới nhất của từng bảng (1 dòng / bảng) — kiểm tra độ mới khi Realtime có thể đã lỡ sự kiện. */
+  async latestStamps(tables) {
+    const out = {};
+    await Promise.all(tables.map(async (t) => {
+      const { data, error } = await this.v2.from(t).select('updated_at').order('updated_at', { ascending: false, nullsFirst: false }).limit(1);
+      if (!error) out[t] = data?.[0]?.updated_at || null;
+    }));
+    return out;
+  }
+
   /** Nhận thay đổi từ thiết bị khác (Realtime). Trả về hàm huỷ. */
   subscribe(onChange, onStatus) {
     let ch = null;
@@ -211,6 +221,13 @@ export class SupabaseAdapter {
   async loadAudit(limit = 200) {
     const { data, error } = await this.v2.from('audit_log').select('*').order('at', { ascending: false }).limit(limit);
     if (error) throw new Error(error.message);
+    return data;
+  }
+
+  /** RPC nghiệp vụ có kiểm tra ở máy chủ (V2.1 GROUP: v2.brood_*). Giữ mã lỗi để app phân biệt (VD vượt ngưỡng). */
+  async rpc(fn, p) {
+    const { data, error } = await this.v2.rpc(fn, { p });
+    if (error) { const e = new Error(error.message); e.code = error.code; throw e; }
     return data;
   }
 

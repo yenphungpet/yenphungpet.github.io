@@ -114,6 +114,7 @@ export class App {
         <span class="sync ${st.state}" data-sync><i></i><span>${st.message}</span></span>
         <a class="role-chip" href="#/settings" title="Vai trò hiện tại">${ROLES[s.role]}</a>
       </div></header>
+      <div class="stale-bar ${st.stale ? '' : 'hidden'}" data-stale role="status">${icon('alert')}<span data-stale-msg>${st.message}</span><button class="btn soft sm" data-resync>${icon('refresh')} Tải lại</button></div>
       <main id="view">${content}</main>
       <nav class="bottom-nav" aria-label="Điều hướng chính"><div class="bottom-nav-in">
         ${NAV.map(([k, href, ic, label]) => html`<a class="nav-item ${k === nav ? 'active' : ''}" href="${href}" ${k === nav ? raw('aria-current="page"') : ''}>${icon(ic)}<span>${label}</span></a>`)}
@@ -154,7 +155,18 @@ export class App {
     this.store.emitStatus = (st) => {
       const el = document.querySelector('[data-sync]');
       if (el) { el.className = `sync ${st.state}`; el.querySelector('span').textContent = st.message; }
+      // Dải cảnh báo dữ liệu cũ (điện thoại ẩn chữ trạng thái ⇒ phải có dải này)
+      const bar = document.querySelector('[data-stale]');
+      if (bar) { bar.classList.toggle('hidden', !st.stale); bar.querySelector('[data-stale-msg]').textContent = st.message; }
     };
+    document.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-resync]');
+      if (!b) return;
+      b.disabled = true;
+      const ok = await this.store.resync();
+      b.disabled = false;
+      toast(ok ? 'Đã tải dữ liệu mới nhất' : 'Chưa tải được — kiểm tra mạng rồi thử lại', ok ? 'ok' : 'error');
+    });
     document.addEventListener('click', (e) => {
       const v = e.target.closest('[data-view-photo]');
       if (v) { e.preventDefault(); openPhotoViewer(this.store, v.dataset.viewPhoto); }
@@ -180,6 +192,7 @@ async function boot() {
     }
     await adapter.init();
     const store = new Store(adapter);
+    store.features = cfg.features || {};
     if (adapter.kind === 'demo') {
       if (!(await adapter.isSeeded())) await adapter.replaceAll(buildDemo(todayVN()));
       else if ((await adapter.getMeta('seedVersion')) !== 3) {

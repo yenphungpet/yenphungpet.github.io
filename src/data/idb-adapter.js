@@ -4,7 +4,7 @@
 import { TABLES, emptyDb } from './schema.js';
 
 const DB_NAME = 'yenphungpet-v2-demo';
-const DB_VERSION = 4; // v2: thêm inventory_items, inventory_movements; v3: inventory_costs; v4: cage_notes (onupgradeneeded tạo store còn thiếu, giữ dữ liệu cũ)
+const DB_VERSION = 5; // v2: thêm inventory_items, inventory_movements; v3: inventory_costs; v4: cage_notes; v5: brood_groups, brood_events (onupgradeneeded tạo store còn thiếu, giữ dữ liệu cũ)
 
 function open() {
   return new Promise((resolve, reject) => {

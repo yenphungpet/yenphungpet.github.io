@@ -61,7 +61,11 @@ export function openDailyForm(app, cageId, opts = {}) {
         </fieldset>`}
       <fieldset class="fieldset ${noPair ? 'hidden' : ''}"><legend>Số liệu TỔNG của lứa (tính đến ngày này)</legend>
         <p class="small muted" style="margin:0">Nhập con số tổng hiện tại, không nhập số phát sinh trong ngày. ${ex ? 'Đang hiển thị số đã lưu của ngày này.' : c.prev ? `Đã điền sẵn theo lần ghi ${fmtDate(c.prev.log_date)} — chỉ sửa ô có thay đổi.` : ''}</p>
-        ${SNAPSHOT_FIELDS.map((f) => stepper(f, LABELS[f], c.values[f], { hint: HINTS[f] }))}
+        ${(() => { const o = ex || (c.clutch ? logsOfClutch(store.db.daily_logs, c.clutch.id).filter((l) => l.log_date <= state.date).pop() : null);
+          return o && (o.eggs_out || o.chicks_out) ? html`<div class="msg info">${icon('swap')} <div>Lứa đã chuyển sang lồng khác: <b>${o.eggs_out || 0} trứng · ${o.chicks_out || 0} chim non</b> (máy chủ tự trừ khi chuyển). "Chim non hiện tại" chỉ đếm chim của lứa còn trong lồng này — không tính nhóm nhận từ lồng khác.</div></div>` : ''; })()}
+        ${SNAPSHOT_FIELDS.map((f) => (store.groupsEnabled && f === 'chicks'
+          ? stepper(f, 'Chim non CỦA LỨA còn trong lồng', c.values[f], { hint: 'Không tính chim nhận từ lồng khác' })
+          : stepper(f, LABELS[f], c.values[f], { hint: HINTS[f] })))}
         <div class="delta-preview" data-delta></div>
       </fieldset>
       <div class="grid2">

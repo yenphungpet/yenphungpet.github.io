@@ -6,6 +6,11 @@ import { DEFAULT_SETTINGS } from '../domain/breeding.js';
 import { todayVN } from '../core/dates.js';
 import { uid } from '../core/ids.js';
 
+const BROOD_SET = ['brood_groups', 'brood_events', 'daily_logs', 'stock_movements'];
+const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'] };
+
+const hhmm = (t) => new Date(t).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+
 export const ROLES = { owner: 'Chủ trại', staff: 'Nhân viên', public: 'Khách' };
 
 const PERMS = {
@@ -48,33 +53,83 @@ export class Store {
     return this._auditP;
   }
 
+  /**
+   * Dữ liệu đang hiển thị có thể CŨ (mất mạng / mất kết nối trực tiếp / tải lại lỗi): giữ dữ liệu nhưng báo rõ
+   * "bản lúc HH:MM, có thể chưa mới" + nút Tải lại — không bao giờ hiện "đã đồng bộ" khi chưa chắc chắn.
+   */
+  markStale(reason) {
+    this.stale = { reason, since: this.lastLoad || Date.now() };
+    this.setStatus('error', `${reason} — dữ liệu lúc ${hhmm(this.stale.since)}, có thể chưa mới`);
+  }
+
   /** Đồng bộ giữa thiết bị: Realtime (nếu adapter hỗ trợ) + tải lại khi quay lại app sau ≥ 20 giây. */
   startSync() {
     if (this._syncing || this.adapter.kind === 'demo') return;
     this._syncing = true;
     this.lastLoad = Date.now();
+    let everLive = false; let live = false;
     // Realtime cho biết BẢNG nào đổi ⇒ chỉ tải lại các bảng đó. Mở lại app / có mạng lại: có thể đã lỡ sự kiện ⇒ tải lại tất cả.
     let changed = new Set(); let full = false;
     const flush = async () => {
       if (this.status.state === 'saving') { this._reloadT = setTimeout(flush, 700); return; }
-      const tables = full || !this.adapter.loadTables ? null : [...changed];
+      const tables = full || this.stale || !this.adapter.loadTables ? null : [...changed]; // dữ liệu đang cũ ⇒ tải lại TOÀN BỘ
       changed = new Set(); full = false;
-      try { await this.reload(tables); } catch (e) { this.setStatus('error', `Mất đồng bộ: ${e.message}`); }
+      try { await this.reload(tables); } catch (e) { this.markStale(navigator.onLine === false ? 'Mất mạng' : `Không tải được dữ liệu mới (${e.message})`); }
     };
     const schedule = (table) => {
-      if (table) changed.add(table); else full = true;
+      // Một thao tác ghi nhiều bảng trong 1 giao dịch; Realtime đôi khi chỉ báo MỘT phần ⇒ tải lại cả nhóm bảng liên quan cùng lúc
+      if (table) for (const t of RELATED[table] || [table]) changed.add(t); else full = true;
       clearTimeout(this._reloadT);
       this._reloadT = setTimeout(flush, 700);
     };
     this._unsub = this.adapter.subscribe?.((table) => schedule(table), (st) => {
       this.realtime = st;
-      if (st === 'SUBSCRIBED') this.setStatus('ok', 'Đồng bộ trực tiếp');
-      if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') this.setStatus('error', 'Mất kết nối trực tiếp — sẽ tải lại khi mở lại app');
+      if (st === 'SUBSCRIBED') {
+        // Kết nối LẠI sau khi rớt (hoặc đang có dữ liệu cũ): có thể đã lỡ thay đổi ⇒ tải lại toàn bộ rồi mới báo "đã đồng bộ"
+        const reconnect = everLive && !live;
+        everLive = true; live = true;
+        if (reconnect || this.stale) schedule();
+        else this.setStatus('ok', `Đồng bộ trực tiếp · ${hhmm(this.lastLoad)}`);
+      }
+      if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(st) && (live || !everLive)) { live = false; this.markStale('Mất kết nối trực tiếp'); }
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && Date.now() - this.lastLoad > 20000) schedule();
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - this.lastLoad > 20000) schedule();
+      else this.probeFreshness().catch(() => {}); // vừa mở lại màn hình: kiểm tra độ mới ngay (Realtime có thể đã lỡ)
     });
     window.addEventListener('online', () => schedule());
+    window.addEventListener('offline', () => this.markStale('Mất mạng'));
+    this._schedule = schedule;
+    // Kiểm tra mỗi 30 giây: mất mạng ⇒ báo; dữ liệu cũ / không có kết nối trực tiếp ⇒ tự tải lại (thay cho Realtime);
+    // đang "trực tiếp" ⇒ mỗi 30 giây hỏi máy chủ lần sửa mới nhất (Realtime có thể lỡ sự kiện mà không báo lỗi)
+    this._watch = setInterval(() => {
+      if (this.status.state === 'saving' || this.status.state === 'loading') return;
+      if (navigator.onLine === false) { if (!this.stale) this.markStale('Mất mạng'); return; }
+      if (this.stale || (everLive && this.realtime !== 'SUBSCRIBED')) schedule();
+      else if (document.visibilityState === 'visible') this.probeFreshness().catch(() => {});
+    }, 30000);
+  }
+
+  /** So thời điểm sửa mới nhất trên máy chủ với dữ liệu đang có; bảng nào mới hơn ⇒ tải lại bảng đó. Trả về danh sách bảng đã lỡ. */
+  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_notes', 'clutches']) {
+    if (!this.adapter.latestStamps) return [];
+    const have = tables.filter((t) => Array.isArray(this.db[t]));
+    const server = await this.adapter.latestStamps(have);
+    const newest = (t) => Math.max(0, ...this.db[t].map((r) => Date.parse(r.updated_at || r.created_at || 0) || 0));
+    const missed = have.filter((t) => server[t] && Date.parse(server[t]) > newest(t));
+    for (const t of missed) this._schedule?.(t);
+    if (missed.length && !this._schedule) await this.reload(missed);
+    this.lastProbe = Date.now();
+    return missed;
+  }
+
+  stopSync() { clearInterval(this._watch); clearTimeout(this._reloadT); this._unsub?.(); this._syncing = false; }
+
+  /** Nút "Tải lại" (người dùng bấm): tải toàn bộ, báo rõ kết quả. */
+  async resync() {
+    this.setStatus('loading', 'Đang tải dữ liệu mới…');
+    try { await this.reload(); return true; } catch (e) { this.markStale(navigator.onLine === false ? 'Mất mạng' : `Không tải được dữ liệu mới (${e.message})`); return false; }
   }
 
   /** tables: chỉ tải lại các bảng này (Realtime báo đổi); bỏ trống = tải lại tất cả. */
@@ -96,7 +151,10 @@ export class Store {
     db.audit_log = audit ? auditRows : (this.db.audit_log || []);
     this.db = db;
     this.lastLoad = Date.now();
-    this.setStatus('ok', `Đã đồng bộ ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`);
+    this.stale = null;
+    // Tải được nhưng KHÔNG có kết nối trực tiếp ⇒ không gọi là "đồng bộ trực tiếp" (tự tải lại mỗi 30 giây)
+    if (!this.adapter.subscribe || this.realtime === 'SUBSCRIBED') this.setStatus('ok', `Đồng bộ trực tiếp · ${hhmm(this.lastLoad)}`);
+    else this.setStatus('warn', `Đã tải lúc ${hhmm(this.lastLoad)} · chưa có kết nối trực tiếp`);
     this.emit();
   }
 
@@ -114,7 +172,7 @@ export class Store {
     return demo ? `Demo ${ROLES[demo[1]]}` : '';
   }
 
-  setStatus(state, message) { this.status = { state, message }; this.emitStatus?.(this.status); }
+  setStatus(state, message) { this.status = { state, message, stale: !!this.stale }; this.emitStatus?.(this.status); }
 
   subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit() { for (const fn of this.listeners) fn(this.db); }
@@ -133,6 +191,32 @@ export class Store {
   today() { return todayVN(); }
   ctx() {
     return { today: this.today(), now: new Date().toISOString(), actor: this.user?.id || 'anonymous', settings: this.settings };
+  }
+
+  /** V2.1 GROUP bật khi cấu hình có features.groups (chỉ trang thử nghiệm) và máy chủ hỗ trợ RPC. */
+  get groupsEnabled() { return !!this.features?.groups && typeof this.adapter.rpc === 'function'; }
+
+  /**
+   * Thao tác trứng / chim non theo nhóm: máy chủ kiểm tra quyền, số lượng, ngưỡng, chống trùng và ghi NGUYÊN TỬ;
+   * xong tải lại các bảng liên quan (không tự sửa dữ liệu ở máy khách). Trả { ok, errors, result, overLimit }.
+   */
+  async brood(fn, p) {
+    if (!this.groupsEnabled) return { ok: false, errors: ['Chức năng nhóm trứng / chim non chưa bật ở bản này'] };
+    if (!this.can('breeding.write')) return { ok: false, errors: ['Bạn không có quyền thực hiện thao tác này'] };
+    this.setStatus('saving', 'Đang lưu…');
+    this.writeSeq = (this.writeSeq || 0) + 1;
+    let result;
+    try {
+      result = await this.adapter.rpc(fn, p);
+    } catch (e) {
+      const msg = String(e.message || e);
+      this.setStatus('error', 'Lưu thất bại');
+      return { ok: false, overLimit: /VUOT_NGUONG/.test(msg), errors: [msg.replace(/^VUOT_NGUONG:\s*/, 'Vượt ngưỡng: ')] };
+    }
+    this.writeSeq += 1;
+    this.setStatus('ok', result?.duplicate ? 'Đã lưu trước đó (không ghi trùng)' : 'Đã lưu');
+    try { await this.reload(['brood_groups', 'brood_events', 'daily_logs', 'stock_movements']); } catch { /* Realtime / lần mở lại sẽ tải */ }
+    return { ok: true, errors: [], result };
   }
 
   /** Thực thi kết quả lập kế hoạch {errors, warnings, ops}. Ném lỗi nếu ghi thất bại. */

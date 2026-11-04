@@ -205,7 +205,9 @@ a.row:active { background: var(--teal-50); }
 .field textarea { min-height: 84px; resize: vertical; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--teal-500); box-shadow: 0 0 0 3px var(--teal-100); }
 .field .hint { font-weight: 400; color: var(--ink-3); font-size: 12px; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.grid2 > * { min-width: 0; } .field input[type=date] { min-width: 0; } /* ô ngày trên Chrome Android có bề rộng tối thiểu riêng — không được đẩy tràn khung 320–360 px */
+@media (max-width: 359px) { .grid2 { grid-template-columns: minmax(0, 1fr); } } /* iPhone SE đời 1: 2 cột quá hẹp, ô ngày bị cắt năm */
 .check { display: flex; align-items: flex-start; gap: 10px; font-weight: 600; font-size: 14px; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface-2); cursor: pointer; }
 .check input { width: 22px; height: 22px; accent-color: var(--teal-600); flex: none; margin: 0; }
 .fieldset { border: 1px solid var(--line); border-radius: var(--r); padding: 12px; background: var(--surface-2); display: flex; flex-direction: column; gap: 10px; }
@@ -380,3 +382,51 @@ main > * { max-width: 100%; }
 details.adv { border: 1px dashed var(--line); border-radius: var(--r); padding: 8px 12px; background: var(--surface-2); }
 details.adv > summary { cursor: pointer; font-weight: 700; color: var(--teal-700); min-height: 32px; display: flex; align-items: center; }
 details.adv[open] > summary { margin-bottom: 8px; }
+
+/* V2.1 GROUP — trứng / chim non theo nhóm (chỉ hiện ở trang thử nghiệm khi bật features.groups) */
+.brood { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); display: flex; flex-direction: column; gap: 6px; }
+.brood.over { border-color: var(--red); box-shadow: 0 0 0 2px var(--red-100); }
+.brood-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 14px; }
+.brood-head b { font-size: 17px; color: var(--teal-900); font-variant-numeric: tabular-nums; }
+.brood-head .grow { flex: 1; }
+.brood-alert { display: flex; gap: 8px; align-items: flex-start; background: var(--red-100); color: var(--red); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13.5px; }
+.brood-alert.big { padding: 12px 14px; font-size: 15px; margin-bottom: 12px; border: 1.5px solid var(--red); }
+.brood-segs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.brood-seg { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; padding: 4px 0; border-top: 1px dashed var(--line); }
+.brood-seg:first-child { border-top: 0; }
+.bs-qty { min-width: 28px; height: 28px; border-radius: 999px; background: var(--teal-100); color: var(--teal-800); font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+.brood-seg.grp .bs-qty { background: var(--gold-100); color: var(--gold-700); }
+.bs-main { min-width: 0; overflow-wrap: anywhere; }
+.age { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.age.known { background: var(--green-100); color: var(--green-700); border: 1.5px solid var(--green-700); }
+.age.est { background: var(--surface); color: var(--gold-700); border: 1.5px dashed var(--gold-600); font-style: italic; }
+.age.unk { background: var(--cream-2); color: var(--ink-3); border: 1.5px dotted var(--ink-3); }
+.brood-row { flex-wrap: wrap; }
+.brood-acts { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; padding-left: 52px; }
+.brood-confirm { border-color: var(--red); background: var(--red-100); }
+.brood-confirm legend { color: var(--red); font-weight: 800; display: inline-flex; gap: 6px; align-items: center; }
+.tl-item.reversed { opacity: .65; }
+.stage-wrap { display: flex; flex-direction: column; gap: 12px; }
+.stage-view { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.stage-pic { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r); padding: 6px; }
+.stage-txt { flex: 1; min-width: 180px; } .stage-txt h3 { margin: 2px 0 4px; color: var(--teal-800); } .stage-txt p { margin: 0 0 4px; }
+.stage-day { font-size: 13px; color: var(--ink-3); font-weight: 700; }
+.stage-track { position: relative; height: 28px; margin: 0 10px; border-bottom: 2px solid var(--line); }
+.stage-tick { position: absolute; bottom: 2px; transform: translateX(-50%); font-size: 11px; color: var(--ink-3); }
+.stage-band { position: absolute; top: 2px; height: 10px; border-radius: 6px; }
+.stage-band.known { background: var(--green-600); }
+.stage-band.est { background: repeating-linear-gradient(90deg, var(--gold-500) 0 6px, transparent 6px 10px); border: 1.5px dashed var(--gold-700); }
+.stage-range { width: 100%; accent-color: var(--teal-600); height: 32px; }
+.stage-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--ink-2); }
+.lg { display: inline-block; width: 22px; height: 8px; border-radius: 4px; vertical-align: middle; margin-right: 4px; }
+.lg.known { background: var(--green-600); } .lg.est { border: 1.5px dashed var(--gold-700); background: var(--gold-100); }
+.stage-all { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.stage-mini { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; font-size: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px; }
+.brood-ev .tl-head { flex-wrap: wrap; row-gap: 6px; }
+.brood-ev > div { overflow-wrap: anywhere; }
+.cc-num small { display: block; font-size: 10px; line-height: 1.25; color: var(--ink-3); margin-top: 1px; }
+.cc-num.now { border-color: var(--teal-500); background: var(--teal-50); }
+/* Dữ liệu có thể cũ (mất mạng / mất kết nối trực tiếp) — luôn hiện, kể cả trên điện thoại */
+.stale-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 8px; margin: 0 auto; max-width: 1100px; padding: 8px 14px; background: var(--red-100); color: var(--red); font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--red); }
+.stale-bar span { flex: 1; min-width: 0; }
+.sync.warn i { background: var(--gold-500); }
