@@ -6,8 +6,8 @@ import { DEFAULT_SETTINGS } from '../domain/breeding.js';
 import { todayVN } from '../core/dates.js';
 import { uid } from '../core/ids.js';
 
-const BROOD_SET = ['brood_groups', 'brood_events', 'daily_logs', 'stock_movements'];
-const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'] };
+const BROOD_SET = ['brood_groups', 'brood_events', 'daily_logs', 'stock_movements', 'cage_checks', 'brood_refs'];
+const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, cage_checks: BROOD_SET, brood_refs: BROOD_SET, daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'] };
 
 const hhmm = (t) => new Date(t).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
@@ -112,7 +112,7 @@ export class Store {
   }
 
   /** So thời điểm sửa mới nhất trên máy chủ với dữ liệu đang có; bảng nào mới hơn ⇒ tải lại bảng đó. Trả về danh sách bảng đã lỡ. */
-  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_notes', 'clutches']) {
+  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_checks', 'cage_notes', 'clutches']) {
     if (!this.adapter.latestStamps) return [];
     const have = tables.filter((t) => Array.isArray(this.db[t]));
     const server = await this.adapter.latestStamps(have);
@@ -196,6 +196,9 @@ export class Store {
   /** V2.1 GROUP bật khi cấu hình có features.groups (chỉ trang thử nghiệm) và máy chủ hỗ trợ RPC. */
   get groupsEnabled() { return !!this.features?.groups && typeof this.adapter.rpc === 'function'; }
 
+  /** V2.2 thẻ lồng thông minh: cần database đã có 0013. Tắt cờ ⇒ giao diện V2.1 như cũ. */
+  get smartCards() { return this.groupsEnabled && !!this.features?.smartCards; }
+
   /**
    * Thao tác trứng / chim non theo nhóm: máy chủ kiểm tra quyền, số lượng, ngưỡng, chống trùng và ghi NGUYÊN TỬ;
    * xong tải lại các bảng liên quan (không tự sửa dữ liệu ở máy khách). Trả { ok, errors, result, overLimit }.
@@ -215,7 +218,7 @@ export class Store {
     }
     this.writeSeq += 1;
     this.setStatus('ok', result?.duplicate ? 'Đã lưu trước đó (không ghi trùng)' : 'Đã lưu');
-    try { await this.reload(['brood_groups', 'brood_events', 'daily_logs', 'stock_movements']); } catch { /* Realtime / lần mở lại sẽ tải */ }
+    try { await this.reload(BROOD_SET); } catch { /* Realtime / lần mở lại sẽ tải */ }
     return { ok: true, errors: [], result };
   }
 

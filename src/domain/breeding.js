@@ -61,13 +61,13 @@ export const METRIC_ORDER = ['eggs', 'fertile', 'infertile', 'damaged', 'hatched
  * Phần chưa khớp KHÔNG được hiểu là chết hay mất tích — app không có số liệu đó, người dùng phải đối chiếu.
  */
 export function chickBalance(s) {
-  const accounted = (s.chicks || 0) + (s.fledged || 0) + (s.chicks_out || 0);
+  const accounted = (s.chicks || 0) + (s.fledged || 0) + (s.chicks_out || 0) + (s.chicks_lost || 0);
   return { hatched: s.hatched || 0, chicks: s.chicks || 0, fledged: s.fledged || 0, accounted, unaccounted: (s.hatched || 0) - accounted };
 }
 
 /** Số đã chuyển sang lồng khác (cộng dồn) ghi trên dòng nhật ký — 0 với dữ liệu trước 0012. */
 export function pickOut(log) {
-  return { eggs_out: Number(log?.eggs_out) || 0, chicks_out: Number(log?.chicks_out) || 0 };
+  return { eggs_out: Number(log?.eggs_out) || 0, chicks_out: Number(log?.chicks_out) || 0, chicks_lost: Number(log?.chicks_lost) || 0 };
 }
 
 /** Cảnh báo cần đối chiếu khi đã nở ≠ non hiện tại + ra ràng (null nếu khớp). Không sửa, không suy đoán số liệu. */
@@ -103,7 +103,7 @@ export function validateSnapshot(s, out = null) {
   if (s.hatched > s.fertile) errors.push('Số đã nở không được lớn hơn số trứng có cồ');
   if (s.hatched + s.damaged + s.infertile > s.eggs) errors.push('Đã nở + Hỏng + Không cồ không được lớn hơn tổng trứng');
   if (s.chicks + s.fledged > s.hatched) errors.push('Chim non hiện tại + Đã ra ràng không được lớn hơn số đã nở');
-  else if (out?.chicks_out && s.chicks + s.fledged + out.chicks_out > s.hatched) errors.push(`Chim non hiện tại + Đã ra ràng + Đã chuyển sang lồng khác (${out.chicks_out}) không được lớn hơn số đã nở (${s.hatched})`);
+  else if ((out?.chicks_out || out?.chicks_lost) && s.chicks + s.fledged + (out.chicks_out || 0) + (out.chicks_lost || 0) > s.hatched) errors.push(`Chim non hiện tại + Đã ra ràng + Đã chuyển sang lồng khác (${out.chicks_out || 0})${out.chicks_lost ? ` + Đã hao hụt (${out.chicks_lost})` : ''} không được lớn hơn số đã nở (${s.hatched})`);
   if (out?.eggs_out && s.hatched + s.damaged + s.infertile + out.eggs_out > s.eggs) errors.push(`Đã nở + Hỏng + Không cồ + Trứng đã chuyển sang lồng khác (${out.eggs_out}) không được lớn hơn tổng trứng (${s.eggs})`);
   return errors;
 }
@@ -308,6 +308,25 @@ export function planCageSave(input, db, { now = new Date().toISOString(), existi
   return { errors: [], record };
 }
 
+/**
+ * V2.2: lồng đã được KIỂM TRA hôm nay chưa — chỉ tính thao tác đã lưu trên máy chủ: báo cáo ngày, "không thay đổi", soi trứng,
+ * ghi nở / hao hụt / tách mẹ / ghi nhận nhóm ở lồng. Chuyển lồng không tính: chuyển 1 con chưa có nghĩa đã xem cả tổ.
+ * Ngày là ngày nghiệp vụ giờ Việt Nam; qua ngày mới tự tính lại, không sửa lịch sử.
+ */
+const CHECK_EVENT_TYPES = new Set(['loss', 'hatch', 'wean', 'create']);
+export function cageCheckInfo(db, cageId, today, logs = logsOfCage(db.daily_logs, cageId).filter((l) => !l.auto_brood)) {
+  const seen = logs.map((l) => ({ date: l.log_date, at: l.updated_at || l.created_at }));
+  const checks = (db.cage_checks || []).filter((c) => c.cage_id === cageId && !c.revoked_at);
+  for (const c of checks) seen.push({ date: c.check_date, at: c.created_at });
+  for (const e of db.brood_events || []) {
+    if (CHECK_EVENT_TYPES.has(e.type) && !e.reversed_by && (e.from_cage_id === cageId || e.to_cage_id === cageId)) seen.push({ date: e.event_date, at: e.created_at });
+  }
+  const past = seen.filter((x) => x.date && x.date <= today);
+  const lastDate = past.reduce((a, x) => (x.date > a ? x.date : a), '') || null;
+  const lastAt = past.reduce((a, x) => (String(x.at || '') > a ? String(x.at) : a), '') || null;
+  return { checkedToday: lastDate === today, lastDate, lastAt, noChangeToday: checks.find((c) => c.kind === 'no_change' && c.check_date === today) || null };
+}
+
 export function cageState(cage, db, today, settings = DEFAULT_SETTINGS) {
   const pair = currentPair(db.pairs, cage.id);
   const clutch = openClutch(db.clutches, cage.id);
@@ -315,10 +334,11 @@ export function cageState(cage, db, today, settings = DEFAULT_SETTINGS) {
   const summary = clutch ? clutchSummary(clutch, db.daily_logs) : null;
   const logs = logsOfCage(db.daily_logs, cage.id).filter((l) => !l.auto_brood);
   const lastLog = logs[logs.length - 1] || null;
-  const daysSinceUpdate = lastLog ? daysBetween(lastLog.log_date, today) : null;
+  const check = cageCheckInfo(db, cage.id, today, logs);
+  const daysSinceUpdate = check.lastDate ? daysBetween(check.lastDate, today) : null;
   const rest = restInfo(db.rest_periods, cage.id, today, !!clutch);
   const loggedToday = !!logs.find((l) => l.log_date === today);
-  const stale = lastLog ? daysSinceUpdate >= settings.staleUpdateDays : true;
+  const stale = check.lastDate ? daysSinceUpdate >= settings.staleUpdateDays : true;
   const longRest = rest.state === 'resting' && rest.days >= settings.longRestDays;
   const openHealth = (db.health_cases || []).filter((h) => h.cage_id === cage.id && h.status !== 'closed' && !h.deleted);
   let status;
@@ -329,7 +349,7 @@ export function cageState(cage, db, today, settings = DEFAULT_SETTINGS) {
   const checks = clutchChecks(clutch, summary, db, today, settings);
   if (openCount > 1) checks.unshift({ level: 'danger', short: `${openCount} lứa đang mở`, text: `Lồng ${cage.code} có ${openCount} lứa cùng mở — chỉ lứa ${clutch.code} được hiển thị; kết thúc lứa thừa` });
   return {
-    cage, pair, clutch, summary, lastLog, daysSinceUpdate, rest, loggedToday, stale, longRest,
+    cage, pair, clutch, summary, lastLog, daysSinceUpdate, rest, loggedToday, stale, longRest, check, checkedToday: check.checkedToday,
     note: latestCageNote(db, cage.id),
     openNotes: notesOfCage(db, cage.id).filter(isOpenAction),
     warnings: logWarnings(lastLog),
@@ -440,7 +460,7 @@ export function planDailySave(db, input, ctx) {
     // Đã chuyển sang lồng khác (máy chủ giữ): theo bản ghi đang sửa, hoặc lần ghi trước của lứa
     const prev = logsOfClutch(db.daily_logs, clutchId).filter((l) => l.log_date < input.log_date).pop();
     const out = pickOut(existing || prev);
-    if (out.eggs_out || out.chicks_out) errors.push(...validateSnapshot(s, out).filter((e) => /chuyển sang lồng khác/.test(e)));
+    if (out.eggs_out || out.chicks_out || out.chicks_lost) errors.push(...validateSnapshot(s, out).filter((e) => /chuyển sang lồng khác/.test(e)));
     // Cảnh báo số tổng bị giảm so với snapshot trước (thường do nhập nhầm biến động thay vì tổng)
     if (prev) {
       for (const f of ['eggs', 'fertile', 'infertile', 'damaged', 'hatched', 'fledged']) {

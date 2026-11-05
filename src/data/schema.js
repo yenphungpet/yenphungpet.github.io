@@ -8,6 +8,8 @@ export const TABLES = [
   'photos', 'checklist', 'audit_log', 'settings', 'listings',
   // V2.1 (0012): nhóm trứng / chim non — chỉ đọc trực tiếp; ghi qua RPC v2.brood_*. Server chưa có bảng ⇒ tải về rỗng.
   'brood_groups', 'brood_events',
+  // V2.2 (0013): kiểm tra trong ngày + soi trứng, ngày tham chiếu — chỉ đọc trực tiếp; ghi qua RPC.
+  'cage_checks', 'brood_refs',
 ];
 
 // Bảng quan trọng cần ghi audit trail khi sửa/xoá

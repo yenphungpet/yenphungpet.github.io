@@ -9,6 +9,8 @@ export function toast(msg, type = 'ok', ms = 2800) {
   el.className = `toast toast-${type}`;
   el.innerHTML = `${icon(type === 'error' ? 'alert' : type === 'warn' ? 'info' : 'check')}<span>${esc(msg)}</span>`;
   host.append(el);
+  const oks = [...host.querySelectorAll('.toast-ok')];
+  if (type === 'ok' && oks.length > 2) oks.slice(0, oks.length - 2).forEach((x) => x.remove());
   requestAnimationFrame(() => el.classList.add('show'));
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, type === 'error' ? Math.max(ms, 5000) : ms);
 }

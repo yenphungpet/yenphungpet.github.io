@@ -26,9 +26,10 @@ export const STAGE_DISCLAIMER = 'Mốc ngày là tham khảo chung cho yến ph�
 export const EGG_CHECK_LABELS = { not_checked: 'Chưa soi', fertile_seen: 'Đã thấy cồ', not_seen_yet: 'Chưa thấy cồ (chưa kết luận)' };
 export const LOSS_REASONS = {
   chick: { dead: 'Chết', missing: 'Mất / không tìm thấy', other: 'Khác' },
-  egg: { egg_damaged: 'Trứng hỏng / vỡ / chết phôi', egg_infertile: 'Xác nhận không cồ (đã soi lại)', other: 'Khác' },
+  egg: { egg_broken: 'Trứng vỡ', egg_damaged: 'Trứng hỏng', egg_missing: 'Trứng mất / chưa rõ nguyên nhân', egg_infertile: 'Xác nhận không cồ (đã soi lại)', other: 'Khác' },
 };
-export const EVENT_LABELS = { create: 'Ghi nhận nhóm', transfer: 'Chuyển lồng', hatch: 'Nở', loss: 'Hao hụt', fledge: 'Ra ràng → lồng phóng', reverse: 'Hoàn tác' };
+LOSS_REASONS.chick.unknown = 'Chưa xác định'; LOSS_REASONS.egg.unknown = 'Chưa xác định';
+export const EVENT_LABELS = { create: 'Ghi nhận nhóm', transfer: 'Chuyển lồng', hatch: 'Nở', loss: 'Hao hụt', fledge: 'Ra ràng → lồng phóng', reverse: 'Hoàn tác', wean: 'Tách mẹ' };
 export const KIND_LABELS = { egg: 'trứng', chick: 'chim non' };
 
 export const chickLimit = (settings) => Number(settings?.chickLimit) > 0 ? Number(settings.chickLimit) : DEFAULT_CHICK_LIMIT;
@@ -50,6 +51,8 @@ export function ageInfo(g, today) {
   return { basis: 'estimated', min: Math.max(0, min), max, text: min === max ? `~${max} ngày (ước tính)` : `~${Math.max(0, min)}–${max} ngày (ước tính)` };
 }
 
+const UNKNOWN_START = 'unknown';
+
 /** Khoảng ngày nở của chim non thuộc LỨA, theo nhật ký: từ ngày sau lần ghi cuối còn 0 nở → ngày ghi số nở tăng lần cuối. Luôn là ƯỚC TÍNH. */
 export function clutchHatchRange(db, clutch) {
   if (!clutch) return null;
@@ -58,10 +61,11 @@ export function clutchHatchRange(db, clutch) {
   for (const l of logs) {
     const h = Number(l.hatched) || 0;
     if (h === 0) { lastZero = l.log_date; continue; }
-    if (h > prev) { if (!first) first = lastZero ? addDays(lastZero, 1) : clutch.start_date; last = l.log_date; }
+    if (h > prev) { if (!first) first = lastZero ? addDays(lastZero, 1) : UNKNOWN_START; last = l.log_date; }
     prev = Math.max(prev, h);
   }
-  if (!first || !last) return null;
+  // Lần ghi đầu tiên đã có chim nở (VD lứa chuyển từ V1, ngày bắt đầu là mốc theo dõi): không biết nở từ khi nào ⇒ chưa rõ tuổi, không đoán
+  if (!first || !last || first === UNKNOWN_START) return null;
   return { hatch_date: first <= last ? first : last, hatch_date_to: last, hatch_basis: 'estimated', source: 'log' };
 }
 
@@ -172,6 +176,7 @@ export function eventText(e, db) {
   if (e.type === 'create') return `Ghi nhận nhóm ${e.qty} ${k} ở ${to}`;
   if (e.type === 'hatch') return `Nở ${e.qty} con từ nhóm trứng ở ${from}`;
   if (e.type === 'loss') return `Hao hụt ${e.qty} ${k} ở ${from} — ${LOSS_REASONS[e.kind]?.[e.reason] || e.reason}`;
+  if (e.type === 'wean') return `Đánh dấu tách mẹ ${e.qty} con ở ${from}`;
   if (e.type === 'fledge') return `Ra ràng ${e.qty} con ${from} → ${db.flight_pens.find((p) => p.id === e.to_pen_id)?.name || 'lồng phóng'}`;
   if (e.type === 'reverse') { const o = (db.brood_events || []).find((x) => x.id === e.reverses_id); return `Hoàn tác: ${o ? eventText(o, db) : 'thao tác'}`; }
   return e.type;
@@ -185,6 +190,7 @@ export function reverseCheck(e, db, user, now = Date.now()) {
   if (!owner && e.created_by !== user?.id) return { ok: false, why: 'Chỉ người thực hiện hoặc chủ trại' };
   if (!owner && now - Date.parse(e.created_at) > 24 * 3600e3) return { ok: false, why: 'Quá 24 giờ — nhờ chủ trại' };
   if (!owner && e.type === 'fledge') return { ok: false, why: 'Chỉ chủ trại hoàn tác ra ràng' };
+  if (!e.group_id) return { ok: true, why: '' }; // thao tác trên lứa: máy chủ đối chiếu với nhật ký
   const touched = [e.new_group_id || e.group_id];
   const later = (db.brood_events || []).some((x) => x.seq > e.seq && !x.reversed_by && x.type !== 'reverse' && (touched.includes(x.group_id) || touched.includes(x.new_group_id)));
   if (later) return { ok: false, why: 'Nhóm đã có thao tác sau — hoàn tác thao tác sau trước' };

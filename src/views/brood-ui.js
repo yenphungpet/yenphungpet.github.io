@@ -54,7 +54,7 @@ export function broodStrip(store, cageId, { counts = true } = {}) {
   </div>`;
 }
 
-function eventRow(store, e) {
+export function eventRow(store, e) {
   const chk = reverseCheck(e, store.db, store.user);
   const by = store.userName(e.created_by) || 'Không rõ';
   const late = backdatedDays(e);

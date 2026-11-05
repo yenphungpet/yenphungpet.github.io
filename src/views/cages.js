@@ -13,6 +13,7 @@ import { noteBlock, noteList, bindNoteActions } from './notes-ui.js';
 import { notesOfLog } from '../domain/notes.js';
 import { broodStrip, broodPanel, bindBroodPanel, openBroodSheet } from './brood-ui.js';
 import { cageBrood } from '../domain/brood.js';
+import { smartRows, counterText, smartListBody, bindSmartCards } from './cage-smart.js';
 
 const FILTERS = [
   ['all', 'Tất cả'], ['notlogged', 'Chưa ghi hôm nay'], ['stale', 'Lâu chưa cập nhật'], ['active', 'Có lứa'],
@@ -22,7 +23,7 @@ const FILTERS = [
 
 const filterFn = {
   all: () => true,
-  notlogged: (s) => s.pair && !s.loggedToday,
+  notlogged: (s) => s.pair && !s.checkedToday,
   stale: (s) => s.stale,
   active: (s) => !!s.clutch,
   incubating: (s) => s.status === 'incubating' || s.status === 'laying',
@@ -47,6 +48,7 @@ export function restText(s) {
 
 const CHECK_TONE = { danger: 'danger', warn: 'warn', info: 'muted' };
 const CHECK_ICON = { danger: 'red', warn: 'gold', info: '' };
+export const NUMS_LEGEND_SMART = 'Trứng và Chim non trên thẻ là số THỰC TẾ đang ở lồng (của lứa + nhận từ lồng khác, đã trừ phần chuyển đi). Có cồ: số trứng hiện có đã thấy cồ theo lần soi gần nhất. Lồng chỉ tính "Đã cập nhật" sau khi lưu thành công trên máy chủ; qua ngày mới tính lại.';
 export const NUMS_LEGEND_GROUPS = 'Trên thẻ lồng: "Chim non hiện có" và "Trứng hiện có" là số THỰC TẾ đang ở lồng = của lứa gốc còn trong lồng + nhận từ lồng khác (đã trừ phần chuyển đi). Trứng đẻ, Có cồ, Không cồ, Hỏng, Đã nở, Ra ràng là số CỘNG DỒN của lứa gốc (cặp trong lồng đẻ).';
 export const NUMS_LEGEND = 'Trên thẻ lồng: Trứng đẻ, Có cồ, Không cồ, Hỏng, Đã nở, Ra ràng là số CỘNG DỒN của lứa (chỉ tăng). Non hiện tại và Chờ kết quả là số HIỆN TẠI — Tổng quan chỉ cộng 2 số này của các lứa đang mở.';
 
@@ -133,17 +135,21 @@ export function renderList(app, _p, query) {
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, states.filter(filterFn[k]).length]));
   const list = states.filter(filterFn[f]).filter((x) => matches(q, x.cage.code, x.cage.name, s.birdName(x.pair?.male_id), s.birdName(x.pair?.female_id), x.note?.text));
   const logged = states.filter((x) => x.loggedToday).length;
+  const smart = s.smartCards ? smartRows(s, states) : null;
   return {
     html: html`
-      <div class="page-head"><div class="grow"><h1>Lồng sinh sản</h1><div class="sub">Đã ghi hôm nay ${logged}/${states.filter((x) => x.pair).length} lồng có cặp</div></div>
+      <div class="page-head"><div class="grow"><h1>Lồng sinh sản</h1><div class="sub ${smart ? 'sc-counter' : ''}">${smart ? counterText(smart) : `Đã ghi hôm nay ${logged}/${states.filter((x) => x.pair).length} lồng có cặp`}</div></div>
         ${s.can('settings.write') ? html`<button class="btn soft sm" data-new-cage>${icon('plus')} Lồng</button>` : ''}</div>
       <label class="search">${icon('search')}<input type="search" placeholder="Tìm mã lồng, chim, ghi chú…" value="${q}" data-q aria-label="Tìm kiếm lồng"></label>
       <div class="chips" role="tablist">${FILTERS.map(([k, l]) => html`<a class="chip ${k === f ? 'active' : ''}" href="#/cages?f=${k}${q ? `&q=${encodeURIComponent(q)}` : ''}">${l} <b>${counts[k]}</b></a>`)}</div>
-      ${list.length ? html`<div class="cage-list">${list.map((x) => cageCard(s, x))}</div>` : empty('Không có lồng nào khớp bộ lọc.', cageArt(72))}
-      <p class="def">${s.groupsEnabled ? NUMS_LEGEND_GROUPS : NUMS_LEGEND}</p>
+      ${smart ? html`<p class="sc-legend"><i class="ok"></i> Lứa nguyên bản <i class="mix"></i> Đã có đảo tổ (không phải bệnh)</p>` : ''}
+      ${smart ? smartListBody(s, smart, new Set(list.map((x) => x.cage.id)))
+        : list.length ? html`<div class="cage-list">${list.map((x) => cageCard(s, x))}</div>` : empty('Không có lồng nào khớp bộ lọc.', cageArt(72))}
+      <p class="def">${s.smartCards ? NUMS_LEGEND_SMART : s.groupsEnabled ? NUMS_LEGEND_GROUPS : NUMS_LEGEND}</p>
     `,
     mount(root) {
       bindCageCards(root, app);
+      if (s.smartCards) bindSmartCards(root, app);
       const qi = root.querySelector('[data-q]');
       let t;
       qi.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { history.replaceState(null, '', `#/cages?f=${f}&q=${encodeURIComponent(qi.value)}`); app.render(); const n = document.querySelector('[data-q]'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 250); });
@@ -157,7 +163,7 @@ export function logCard(store, log, prev, { editable = true, today } = {}) {
   const clutch = log.clutch_id ? store.byId('clutches', log.clutch_id) : null;
   return html`<div class="tl-item ${log.log_date === today ? 'today' : ''}">
     <div class="tl-head"><b>${fmtDate(log.log_date)}</b>${log.log_date === today ? badge('Hôm nay', 'ok') : ''}
-      ${clutch ? badge(clutch.code, 'info') : badge('Không thuộc lứa', 'muted')}${log.auto_brood ? badge('Tự tạo khi chuyển lồng — chưa phải báo cáo ngày', 'muted') : ''}<span class="grow"></span>
+      ${clutch ? badge(clutch.code, 'info') : badge('Không thuộc lứa', 'muted')}${log.auto_brood ? badge('Tự tạo khi chuyển lồng / soi trứng / hao hụt — chưa phải báo cáo ngày', 'muted') : ''}<span class="grow"></span>
       ${editable ? html`<button class="btn soft sm" data-edit-log="${log.id}" data-cage-id="${log.cage_id}">${icon('edit')} Sửa</button>` : ''}</div>
     ${clutch ? html`<div class="small num">Trứng ${log.eggs} · có cồ ${log.fertile} · không cồ ${log.infertile} · hỏng ${log.damaged} · nở ${log.hatched} · non ${log.chicks} · ra ràng ${log.fledged}${log.eggs_out || log.chicks_out ? ` · đã chuyển sang lồng khác: ${log.eggs_out || 0} trứng, ${log.chicks_out || 0} non` : ''}</div>` : ''}
     ${d ? html`<div class="tl-delta">Biến động so với lần trước: ${d}</div>` : ''}

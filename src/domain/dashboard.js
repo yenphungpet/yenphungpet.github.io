@@ -74,7 +74,7 @@ export function heroLine(nTasks, nAlerts) {
 export function todayTasks(db, today, settings = DEFAULT_SETTINGS, role = 'owner', nameOf = () => '') {
   const { states, alerts } = dashboardMetrics(db, today, settings);
   const tasks = [];
-  const notLogged = states.filter((s) => s.pair && !s.loggedToday);
+  const notLogged = states.filter((s) => s.pair && !s.checkedToday);
   if (notLogged.length) tasks.push({ kind: 'log', icon: 'clipboard', title: `Cập nhật ${notLogged.length} lồng sinh sản chưa ghi hôm nay`, detail: notLogged.slice(0, 8).map((s) => s.cage.code).join(', ') + (notLogged.length > 8 ? '…' : ''), href: '#/cages?f=notlogged' });
   for (const s of alerts.longRest) {
     tasks.push({ kind: 'rest', icon: 'moon', title: `${s.cage.code}: đánh giá lại điều kiện nuôi & sức khoẻ`, detail: s.rest.overdueReview ? `Quá ngày dự kiến đánh giá (${s.rest.period.expected_review_date})` : `Đã nghỉ ${s.rest.days} ngày`, href: `#/cage/${s.cage.id}` });
