@@ -17,6 +17,36 @@ export function toast(msg, type = 'ok', ms = 2800) {
 
 // ---------------- Bottom sheet ----------------
 const stack = [];
+// iPhone: bàn phím ảo chỉ thu nhỏ visual viewport, biểu mẫu vẫn nằm sau bàn phím ⇒ đặt sheet theo visual viewport.
+// Đang pinch-zoom thì bỏ qua, để không cản zoom phục vụ trợ năng.
+let lockY = 0;
+function syncViewport() {
+  const v = window.visualViewport; const r = document.documentElement.style;
+  if (!v || Math.abs(v.scale - 1) > 0.01) { r.removeProperty('--vv-h'); r.removeProperty('--vv-top'); return; }
+  r.setProperty('--vv-h', `${Math.round(v.height)}px`); r.setProperty('--vv-top', `${Math.round(v.offsetTop)}px`);
+}
+function lockPage() {
+  lockY = window.scrollY;
+  document.body.classList.add('no-scroll');
+  syncViewport();
+  window.visualViewport?.addEventListener('resize', syncViewport);
+  window.visualViewport?.addEventListener('scroll', syncViewport);
+}
+function unlockPage() {
+  window.visualViewport?.removeEventListener('resize', syncViewport);
+  window.visualViewport?.removeEventListener('scroll', syncViewport);
+  document.documentElement.style.removeProperty('--vv-h'); document.documentElement.style.removeProperty('--vv-top');
+  document.body.classList.remove('no-scroll');
+  window.scrollTo(0, lockY); // iOS có thể đã cuộn trang khi bàn phím mở
+}
+// Đợi bàn phím mở xong rồi đưa ô đang nhập vào vùng nhìn thấy
+document.addEventListener('focusin', (e) => {
+  if (!stack.length || !e.target.closest?.('.sheet') || !e.target.matches('input,textarea,select')) return;
+  setTimeout(() => { if (document.activeElement === e.target) e.target.scrollIntoView({ block: 'nearest' }); }, 320);
+});
+
+export const sheetOpen = () => stack.length > 0;
+
 export function openSheet({ title, subtitle = '', body, footer = '', onMount, onClose, size = '' }) {
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap';
@@ -32,13 +62,14 @@ export function openSheet({ title, subtitle = '', body, footer = '', onMount, on
       ${footer ? html`<footer class="sheet-foot">${footer}</footer>` : ''}
     </section>`);
   document.body.append(wrap);
-  document.body.classList.add('no-scroll');
+  if (!stack.length) lockPage();
   let closed = false;
   const close = () => {
     if (closed) return; closed = true;
     wrap.classList.remove('open');
     const i = stack.indexOf(close); if (i >= 0) stack.splice(i, 1);
-    setTimeout(() => { wrap.remove(); if (!stack.length) document.body.classList.remove('no-scroll'); }, 220);
+    if (!stack.length) unlockPage();
+    setTimeout(() => wrap.remove(), 220);
     onClose?.();
   };
   wrap.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });

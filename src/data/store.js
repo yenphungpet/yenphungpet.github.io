@@ -222,6 +222,22 @@ export class Store {
     return { ok: true, errors: [], result };
   }
 
+  /** Xoá vĩnh viễn lồng phóng chưa có dữ liệu: máy chủ kiểm tra lại. Demo xoá trực tiếp. */
+  async deletePen(id) {
+    if (!this.can('settings.write')) return { ok: false, errors: ['Chỉ chủ trại được xoá lồng phóng'] };
+    if (!this.adapter.rpc) return this.run({ ops: [{ table: 'flight_pens', op: 'delete', record: { id }, before: this.byId('flight_pens', id) }] });
+    try { await this.adapter.rpc('flight_pen_delete', { pen_id: id }); } catch (e) { return { ok: false, errors: [String(e.message || e)] }; }
+    await this.reload(['flight_pens']);
+    return { ok: true, errors: [] };
+  }
+
+  /** Lịch sử sửa của một bản ghi: chỉ vai trò đọc được audit. */
+  async recordAudit(table, id) {
+    if (!this.can('audit.read')) return [];
+    if (this.adapter.loadRecordAudit) return this.adapter.loadRecordAudit(table, id);
+    return (this.db.audit_log || []).filter((a) => a.table_name === table && a.record_id === id).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }
+
   /** Thực thi kết quả lập kế hoạch {errors, warnings, ops}. Ném lỗi nếu ghi thất bại. */
   async run(plan, { requires } = {}) {
     if (requires && !this.can(requires)) return { ok: false, errors: ['Bạn không có quyền thực hiện thao tác này'], warnings: [] };

@@ -13,7 +13,7 @@ import { noteBlock, noteList, bindNoteActions } from './notes-ui.js';
 import { notesOfLog } from '../domain/notes.js';
 import { broodStrip, broodPanel, bindBroodPanel, openBroodSheet } from './brood-ui.js';
 import { cageBrood } from '../domain/brood.js';
-import { smartRows, counterText, smartListBody, bindSmartCards } from './cage-smart.js';
+import { smartRows, counterText, smartListBody, bindSmartCards, advanceToNext } from './cage-smart.js';
 
 const FILTERS = [
   ['all', 'Tất cả'], ['notlogged', 'Chưa ghi hôm nay'], ['stale', 'Lâu chưa cập nhật'], ['active', 'Có lứa'],
@@ -73,7 +73,7 @@ export function cageCard(store, s, { hideNote = false } = {}) {
         ${s.longRest ? badge('Nghỉ lâu — đánh giá lại', 'orange') : ''}
       </div>
     </div>
-    ${hideNote ? '' : noteBlock(store, s.note, { openCount: s.openNotes.length })}
+    ${hideNote ? '' : noteBlock(store, s.note, { plain: true })}
     ${broodStrip(store, s.cage.id, { counts: !sum })}
     ${sum ? html`<div class="cc-nums">
         <div class="cc-num gold"><b>${sum.eggs}</b><span>Trứng đẻ</span></div>
@@ -111,7 +111,7 @@ export function bindCageCards(root, app) {
     if (b.dataset.act === 'today') {
       // KHÔNG dùng thuộc tính disabled (nút bị vô hiệu không phát sự kiện, "title" không hiện trên điện thoại => bấm im lặng)
       if (!currentPair(st.db.pairs, cageId)) openNoPairNotice(app, cageId);
-      else openDailyForm(app, cageId, { date: st.today() });
+      else openDailyForm(app, cageId, { date: st.today(), onSaved: ({ date }) => { if (date === st.today()) advanceToNext(app, cageId); } });
     }
     if (b.dataset.act === 'edit') {
       const logs = logsOfCage(st.db.daily_logs, cageId);
@@ -177,7 +177,8 @@ export function logCard(store, log, prev, { editable = true, today } = {}) {
         .filter((u, i, a) => /^https:\/\//.test(u || '') && a.indexOf(u) === i);
       return urls.length ? html`<div class="thumbs">${urls.map((u, i) => html`<a class="thumb" href="${u}" target="_blank" rel="noopener noreferrer"><img src="${u}" alt="${i ? 'Ảnh V1 — bản ghi khác cùng ngày' : 'Ảnh từ V1'}" loading="lazy" referrerpolicy="no-referrer"></a>`)}</div>` : '';
     })()}
-    <div class="tl-meta">Tạo ${fmtDateTime(log.created_at)}${log.version ? html` · <b>đã sửa ${log.version} lần</b>, lần cuối ${fmtDateTime(log.updated_at)}` : ''}</div>
+    <div class="tl-meta">Tạo ${fmtDateTime(log.created_at)}${log.version ? html` · <b>đã sửa ${log.version} lần</b>, lần cuối ${fmtDateTime(log.updated_at)}${store.userName(log.updated_by) ? ` · ${store.userName(log.updated_by)}` : ''}` : ''}
+      ${log.version && store.can('audit.read') ? html`<button type="button" class="btn ghost sm" data-audit="daily_logs" data-id="${log.id}">${icon('history')} Lịch sử sửa</button>` : ''}</div>
   </div>`;
 }
 

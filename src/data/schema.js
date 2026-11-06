@@ -13,7 +13,7 @@ export const TABLES = [
 ];
 
 // Bảng quan trọng cần ghi audit trail khi sửa/xoá
-export const AUDITED = new Set(['daily_logs', 'clutches', 'rest_periods', 'pairs', 'birds', 'stock_movements', 'orders', 'payments', 'transactions', 'health_cases', 'inventory_items', 'inventory_movements', 'inventory_costs', 'cage_notes']);
+export const AUDITED = new Set(['flight_pens', 'cage_notes', 'daily_logs', 'clutches', 'rest_periods', 'pairs', 'birds', 'stock_movements', 'orders', 'payments', 'transactions', 'health_cases', 'inventory_items', 'inventory_movements', 'inventory_costs', 'cage_notes']);
 
 export function emptyDb() {
   const db = {};

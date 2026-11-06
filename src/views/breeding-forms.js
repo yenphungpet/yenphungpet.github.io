@@ -11,7 +11,7 @@ import { fmtDate, addDays, isISODate } from '../core/dates.js';
 import { toInt } from '../core/format.js';
 import { uid } from '../core/ids.js';
 import { openPairSheet } from './pairing-sheet.js';
-import { noteList } from './notes-ui.js';
+import { noteList, bindNoteActions } from './notes-ui.js';
 import { notesOfLog } from '../domain/notes.js';
 
 const HINTS = {
@@ -74,7 +74,6 @@ export function openDailyForm(app, cageId, opts = {}) {
       </div>
       ${(() => { const old = ex ? notesOfLog(store.db, ex) : []; return old.length ? html`<div class="field"><span>Ghi chú đã có ngày này (${old.length})</span>${noteList(store, old)}</div>` : ''; })()}
       ${field(ex ? 'Thêm ghi chú mới (tuỳ chọn)' : 'Ghi chú (tuỳ chọn)', html`<textarea name="note" rows="3" maxlength="2000" autocapitalize="sentences" enterkeyhint="done" placeholder="VD: Mái ấp đều, soi thấy 3 trứng có cồ…"></textarea>`, 'Mỗi lần lưu là 1 ghi chú mới, không ghi đè ghi chú cũ. Ghi chú mới nhất hiện ngay trên thẻ lồng.')}
-      <label class="check"><input type="checkbox" name="note_action"> Cần xử lý (hiện ở “Việc cần làm hôm nay” tới khi xác nhận xong)</label>
       <div class="field"><span>Ảnh</span>${photoPickerHtml(ex?.photo_ids || [])}</div>
       <div class="form-msg" data-msg></div>
     </form>`;
@@ -117,6 +116,7 @@ export function openDailyForm(app, cageId, opts = {}) {
         updDelta();
       };
       wire();
+      bindNoteActions(el, app);
       el.addEventListener('click', async (e) => {
         if (e.target.closest('[data-go-pair]')) { close(); openPairSheet(app, cageId); return; }
         if (e.target.closest('[data-del]')) {
@@ -139,7 +139,7 @@ export function openDailyForm(app, cageId, opts = {}) {
           const snapshot = {}; SNAPSHOT_FIELDS.forEach((f) => { snapshot[f] = toInt(v[f], -1); });
           const input = {
             id: c.existing?.id, cage_id: cageId, log_date: v.log_date, snapshot,
-            parents_status: v.parents_status, nest_status: v.nest_status, note: v.note, noteAction: !!v.note_action, photo_ids: picker.ids(),
+            parents_status: v.parents_status, nest_status: v.nest_status, note: v.note, photo_ids: picker.ids(),
             newClutch: v.new_clutch ? { start_date: v.first_egg } : null,
             expectedVersion: openedVersion,
           };
@@ -155,6 +155,7 @@ export function openDailyForm(app, cageId, opts = {}) {
           if (!r.ok) { showMessages(msg, r.errors); toast('Lưu thất bại — dữ liệu chưa được ghi', 'error'); return; }
           toast(`${plan.isEdit ? 'Đã cập nhật' : 'Đã lưu'} nhật ký ${cage.code} ngày ${fmtDate(v.log_date)}`);
           close();
+          opts.onSaved?.({ date: v.log_date });
         });
       });
     },

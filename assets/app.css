@@ -14,7 +14,10 @@
   color-scheme: light;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; touch-action: manipulation; }
+/* iPhone: chữ nhập dưới 16px làm Safari tự zoom; touch-action bỏ zoom khi chạm đúp nút +/−, vẫn giữ pinch-to-zoom */
+input:not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea { font-size: 16px; }
+a, button, label, input, select, textarea { touch-action: manipulation; }
 body { margin: 0; font-family: var(--font); font-size: 15px; line-height: 1.5; color: var(--ink); background: var(--cream);
   background-image: radial-gradient(1200px 400px at 100% -10%, rgba(26, 140, 132, .10), transparent 60%), radial-gradient(900px 300px at -10% 0%, rgba(242, 181, 58, .12), transparent 60%);
   background-attachment: fixed; min-height: 100vh; overflow-x: hidden; }
@@ -252,9 +255,9 @@ a.row:active { background: var(--teal-50); }
 .viewer img { width: 100%; height: auto; border-radius: 12px; display: block; background: var(--cream-2); min-height: 200px; }
 
 /* ---------- Sheet ---------- */
-.sheet-wrap { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-end; justify-content: center; }
+.sheet-wrap { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: var(--vv-h, 100%); z-index: 100; display: flex; align-items: flex-end; justify-content: center; }
 .sheet-backdrop { position: absolute; inset: 0; background: rgba(10, 30, 29, .45); opacity: 0; transition: opacity .2s; }
-.sheet { position: relative; width: 100%; max-width: 640px; max-height: 92vh; max-height: 92dvh; background: var(--cream); border-radius: 24px 24px 0 0; display: flex; flex-direction: column; transform: translateY(30px); opacity: 0; transition: transform .22s ease, opacity .2s; box-shadow: var(--shadow-lg); }
+.sheet { position: relative; width: 100%; max-width: 640px; max-height: 92vh; max-height: 92dvh; max-height: min(92dvh, calc(var(--vv-h, 100dvh) - 8px)); background: var(--cream); border-radius: 24px 24px 0 0; display: flex; flex-direction: column; transform: translateY(30px); opacity: 0; transition: transform .22s ease, opacity .2s; box-shadow: var(--shadow-lg); }
 .sheet.wide { max-width: 860px; }
 .sheet-wrap.open .sheet-backdrop { opacity: 1; }
 .sheet-wrap.open .sheet { transform: none; opacity: 1; }
@@ -354,6 +357,23 @@ main > * { max-width: 100%; }
 .pen-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 @media (min-width: 560px) { .pen-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .pen-actions .btn { white-space: normal; line-height: 1.2; min-width: 0; }
+.pen-count { width: 100%; margin-top: 12px; }
+.pen-sum { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.pen-sum div { background: var(--surface-2); border-radius: 10px; padding: 6px 2px; text-align: center; font-size: 11.5px; color: var(--ink-3); line-height: 1.25; }
+.pen-sum b { display: block; font-size: 16px; color: var(--ink); }
+.pen-unknown { margin-top: 8px; }
+.pen-archived summary { font-weight: 800; color: var(--teal-800); cursor: pointer; min-height: 32px; }
+.pen-archived .row { align-items: center; }
+.pen-archived .btn { flex: none; }
+.cc-code-row { display: flex; align-items: center; gap: 8px; margin-block: -6px; }
+.sc-pen { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; padding: 4px 10px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--teal-700); font-weight: 700; font-size: 13px; cursor: pointer; }
+.sc-pen svg { width: 16px; height: 16px; }
+.note-pen { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 36px; border: 0; background: none; color: var(--teal-700); cursor: pointer; }
+.note-pen svg { width: 17px; height: 17px; color: inherit; }
+.cage-card.smart { scroll-margin-top: 76px; }
+.audit-row { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; overflow-wrap: anywhere; }
+.audit-row:last-child { border-bottom: 0; }
+.audit-row ul { margin: 4px 0 0; padding-left: 18px; }
 
 /* ---------- Kho & thức ăn ---------- */
 .inv-card { display: flex; flex-direction: column; gap: 10px; border-left: 5px solid var(--teal-500); }

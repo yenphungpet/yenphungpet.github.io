@@ -3,7 +3,7 @@
 // Mọi thay đổi gửi lên máy chủ; thẻ chỉ đổi sau khi lưu thành công.
 import { html, raw } from '../ui/html.js';
 import { icon } from '../ui/icons.js';
-import { openSheet, field, stepper, options, showMessages, formValues, busy, toast, badge, empty } from '../ui/components.js';
+import { openSheet, sheetOpen, field, stepper, options, showMessages, formValues, busy, toast, badge, empty } from '../ui/components.js';
 import { cageArt } from '../ui/brand.js';
 import { fmtDate, fmtDateShort, fmtDateTime, relativeDays, addDays, daysBetween } from '../core/dates.js';
 import { CAGE_STATUS_LABELS, openClutch } from '../domain/breeding.js';
@@ -14,7 +14,7 @@ import {
 } from '../domain/smart-cards.js';
 import { openDailyForm, openNoPairNotice } from './breeding-forms.js';
 import { eventRow, openTransferForm, openCreateGroup, openGroupAction, openGroupDetail, openReverse, openBroodSheet } from './brood-ui.js';
-import { noteBlock } from './notes-ui.js';
+import { noteBlock, bindNoteActions } from './notes-ui.js';
 import { pairLabel } from './cages.js';
 
 // Thẻ đang mở rộng. Khi còn thẻ mở: giữ nguyên thứ tự danh sách để không nhảy trong lúc đang thao tác; thu gọn thì mới sắp xếp lại.
@@ -59,16 +59,15 @@ export function smartCard(store, row) {
   const need = needsCheck(s, b);
   const canW = store.can('breeding.write');
   const tone = { rearing: 'ok', incubating: 'warn', laying: 'warn', awaiting_close: 'info', resting: 'muted', idle: 'muted', no_pair: 'muted' }[s.status];
-  const alerts = s.warnings.length + s.checks.filter((c) => c.level !== 'info').length + s.openHealth.length + s.openNotes.length + (b.over ? 1 : 0);
   return html`<article class="cage-card smart foster-${foster.state} ${need && !s.checkedToday ? 'unchecked' : ''}" data-cage="${id}">
     <div class="cc-top">
-      <div><div class="cc-code">${s.cage.code}</div><div class="cc-pair">${pairLabel(store, s.pair)}</div></div>
+      <div><div class="cc-code-row"><div class="cc-code">${s.cage.code}</div>${canW ? html`<button class="sc-pen" data-act="edit" aria-label="Sửa nhật ký gần nhất của ${s.cage.code}">${icon('edit')} Sửa</button>` : ''}</div><div class="cc-pair">${pairLabel(store, s.pair)}</div></div>
       <div class="cc-badges">
         ${badge(CAGE_STATUS_LABELS[s.status], tone)}
         ${need ? (s.checkedToday ? badge(raw(`${icon('check')} Đã cập nhật`), 'ok') : badge('Chưa cập nhật', 'warn')) : ''}
-        ${alerts ? badge(raw(`${icon('alert')} Cần xem ${alerts}`), 'danger') : ''}
       </div>
     </div>
+    ${noteBlock(store, s.note, { card: true })}
     <div class="sc-nums">
       <div class="sc-num gold"><b>${b.eggs}</b><span>Trứng</span></div>
       <div class="sc-num green"><b>${b.chicks}</b><span>Chim non</span></div>
@@ -121,7 +120,6 @@ function expandedBody(store, row, foster, eggs, loss) {
       ${b.over ? badge(`${b.chicks} chim non — vượt ngưỡng ${chickLimit(store.settings)} con / lồng`, 'danger') : ''}
       ${s.warnings.map((w) => badge(w, 'danger'))}${s.checks.map((c) => badge(c.short, CHECK_TONE[c.level]))}
       ${s.openHealth.length ? badge(raw(`${icon('heart')} Theo dõi sức khoẻ`), 'danger') : ''}${s.longRest ? badge('Nghỉ lâu — đánh giá lại', 'orange') : ''}</div>` : ''}
-    ${s.note ? noteBlock(store, s.note, { openCount: s.openNotes.length }) : ''}
 
     <div class="sc-section"><h3>Trứng trong tổ (${eggs.total})</h3>${canW && eggs.total ? html`<button class="btn soft sm" data-sact="eggcheck">${icon('search')} Soi trứng</button>` : ''}</div>
     ${eggs.total ? html`<div class="egg-chips">
@@ -169,7 +167,26 @@ export function smartListBody(store, rows, filtered) {
   return html`<div class="cage-list">${ordered.map((r, i) => html`${i === firstDone && i > 0 && !expanded.size ? html`<div class="sc-divider">Đã kiểm tra hôm nay / không cần kiểm tra</div>` : ''}${smartCard(store, r)}`)}</div>`;
 }
 
+/**
+ * Sau khi kiểm tra xong một lồng: thu gọn thẻ, sắp xếp lại, cuộn tới lồng chưa cập nhật kế tiếp trong danh sách đang lọc.
+ * Không cuộn nếu đã rời danh sách, hoặc đang mở biểu mẫu / nhập liệu.
+ */
+export function advanceToNext(app, cageId) {
+  if (!app.store.smartCards || !/^#\/cages(\?|$)/.test(location.hash)) return;
+  expanded.clear();
+  app.render();
+  // Chờ lần vẽ lại do dữ liệu mới (trễ 30 ms), lần đó giữ nguyên vị trí cuộn
+  setTimeout(() => {
+    if (sheetOpen() || !/^#\/cages(\?|$)/.test(location.hash) || document.activeElement?.matches('input,textarea,select')) return;
+    const next = [...document.querySelectorAll('.cage-card.smart.unchecked')].find((c) => c.dataset.cage !== cageId);
+    // Không thêm thông báo khi còn lồng kế tiếp: thông báo thứ hai sẽ che mã lồng vừa cuộn tới
+    if (next) next.scrollIntoView({ block: 'start' });
+    else { window.scrollTo(0, 0); toast('Đã kiểm tra hết các lồng trong danh sách'); }
+  }, 90);
+}
+
 export function bindSmartCards(root, app) {
+  bindNoteActions(root, app);
   root.addEventListener('click', (e) => {
     const r = e.target.closest('[data-reverse]');
     if (r) return openReverse(app, r.dataset.reverse);
@@ -204,9 +221,8 @@ async function markNoChange(app, cageId, btn) {
   await busy(btn, async () => {
     const r = await app.store.brood('cage_check_no_change', { request_id: newRequestId(), cage_id: cageId });
     if (!r.ok) { toast(r.errors.join('; '), 'error'); return; }
-    expanded.delete(cageId);
     toast(`Đã xác nhận ${app.store.byId('cages', cageId)?.code}: không thay đổi`);
-    app.render();
+    advanceToNext(app, cageId);
   });
 }
 

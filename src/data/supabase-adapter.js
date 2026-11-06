@@ -224,6 +224,12 @@ export class SupabaseAdapter {
     return data;
   }
 
+  async loadRecordAudit(table, id) {
+    const { data, error } = await this.v2.from('audit_log').select('*').eq('table_name', table).eq('record_id', id).order('at', { ascending: false }).limit(100);
+    if (error) throw new Error(error.message);
+    return data;
+  }
+
   /** RPC nghiệp vụ có kiểm tra ở máy chủ (V2.1 GROUP: v2.brood_*). Giữ mã lỗi để app phân biệt (VD vượt ngưỡng). */
   async rpc(fn, p) {
     const { data, error } = await this.v2.rpc(fn, { p });
