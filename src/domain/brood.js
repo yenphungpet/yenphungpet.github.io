@@ -4,7 +4,7 @@
 // tuổi theo khoảng ngày (người dùng ước tính, hoặc khoảng ngày ghi nhận nở trong nhật ký lứa) luôn hiển thị là ƯỚC TÍNH.
 
 import { daysBetween, addDays, isISODate, todayVN } from '../core/dates.js';
-import { logsOfClutch, openClutch, pendingEggs, pickSnapshot } from './breeding.js';
+import { logsOfClutch, openClutches, pendingEggs, pickSnapshot, clutchTitle } from './breeding.js';
 
 export const DEFAULT_CHICK_LIMIT = 4;
 export const AGE_GAP_DAYS = 7;          // chênh tuổi giữa các nhóm trong 1 lồng quá số ngày này ⇒ cảnh báo (khi có dữ liệu tuổi)
@@ -88,18 +88,20 @@ export function clutchNow(db, clutch) {
  * over: số chim non > ngưỡng; ageGap: chênh tuổi chắc chắn > AGE_GAP_DAYS (chỉ khi có dữ liệu tuổi).
  */
 export function cageBrood(db, cageId, today, settings) {
-  const clutch = openClutch(db.clutches, cageId);
-  const own = clutchNow(db, clutch);
+  // Mỗi lứa đang mở một phần riêng; clutch / own là lứa mới nhất
+  const parts = openClutches(db.clutches, cageId).map((c) => ({ clutch: c, own: clutchNow(db, c) }));
+  const { clutch = null, own = null } = parts[parts.length - 1] || {};
   const eggGroups = activeGroups(db, cageId, 'egg');
   const chickGroups = activeGroups(db, cageId, 'chick');
   const segments = [];
-  if (own?.chicks) {
-    const r = clutchHatchRange(db, clutch);
-    segments.push({ kind: 'chick', own: true, qty: own.chicks, clutch, age: ageInfo(r, today), label: `Lứa ${clutch.code}` });
+  for (const p of parts) {
+    if (p.own?.chicks) segments.push({ kind: 'chick', own: true, qty: p.own.chicks, clutch: p.clutch, age: ageInfo(clutchHatchRange(db, p.clutch), today), label: clutchTitle(p.clutch) });
   }
   for (const g of chickGroups) segments.push({ kind: 'chick', own: false, qty: g.qty, group: g, age: ageInfo(g, today), label: originShort(g, db) });
   const eggSegments = [];
-  if (own?.eggs) eggSegments.push({ kind: 'egg', own: true, qty: own.eggs, clutch, label: `Lứa ${clutch.code}` });
+  for (const p of parts) {
+    if (p.own?.eggs) eggSegments.push({ kind: 'egg', own: true, qty: p.own.eggs, clutch: p.clutch, label: clutchTitle(p.clutch) });
+  }
   for (const g of eggGroups) eggSegments.push({ kind: 'egg', own: false, qty: g.qty, group: g, label: originShort(g, db) });
   const chicks = segments.reduce((a, s) => a + s.qty, 0);
   const eggs = eggSegments.reduce((a, s) => a + s.qty, 0);
@@ -107,7 +109,7 @@ export function cageBrood(db, cageId, today, settings) {
   const aged = segments.filter((s) => s.age.basis !== 'unknown');
   const gap = aged.length > 1 ? Math.max(...aged.map((s) => s.age.min)) - Math.min(...aged.map((s) => s.age.max)) : 0;
   return {
-    clutch, own, segments, eggSegments, chicks, eggs, limit,
+    clutch, own, parts, segments, eggSegments, chicks, eggs, limit,
     over: chicks > limit, groupCount: eggGroups.length + chickGroups.length,
     ageGap: gap > AGE_GAP_DAYS ? gap : 0,
     unknownAges: segments.filter((s) => s.age.basis === 'unknown').reduce((a, s) => a + s.qty, 0),

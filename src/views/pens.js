@@ -3,7 +3,8 @@ import { icon } from '../ui/icons.js';
 import { cageArt } from '../ui/brand.js';
 import { openSheet, field, options, showMessages, formValues, busy, toast, confirmDialog, empty, badge } from '../ui/components.js';
 import { MOVEMENT_TYPES, ORIGIN_LABELS, PEN_NAME_MAX, penBalance, penLedger, penSummary, planMovement, planDeleteMovement, planPenCount, planOrigin, planPenSave, penHasData } from '../domain/stock.js';
-import { currentPair, byCageCode } from '../domain/breeding.js';
+import { currentPair, byCageCode, clutchSummary, movedToPens, clutchTitle } from '../domain/breeding.js';
+import { newRequestId } from '../domain/brood.js';
 import { fmtDate, fmtDateTime } from '../core/dates.js';
 import { toInt } from '../core/format.js';
 import { openDailyForm } from './breeding-forms.js';
@@ -215,6 +216,7 @@ export function openMovementForm(app, { type, penId, movement = null }) {
   let t = m?.type || type;
   const titles = { in_breeding: 'Nhập từ lồng sinh sản', in_other: 'Nhập khác', transfer: 'Chuyển giữa lồng phóng', loss: 'Ghi nhận hao hụt', adjust_out: 'Điều chỉnh kiểm đếm', adjust_in: 'Điều chỉnh kiểm đếm' };
   const otherPen = P.find((p) => p.id !== penId)?.id;
+  const requestId = newRequestId();
   const bodyFor = (tt) => html`<form class="form" data-f>
     ${tt.startsWith('adjust') ? field('Loại điều chỉnh', html`<select name="type">${options({ adjust_out: 'Đếm thực tế ÍT hơn sổ (−)', adjust_in: 'Đếm thực tế NHIỀU hơn sổ (+)' }, tt)}</select>`) : html`<input type="hidden" name="type" value="${tt}">`}
     ${tt.startsWith('in') ? '' : ''}
@@ -227,7 +229,7 @@ export function openMovementForm(app, { type, penId, movement = null }) {
       ${field('Số lượng', html`<input type="number" name="qty" min="1" step="1" inputmode="numeric" value="${m?.qty || ''}" required>`)}
       ${field('Ngày', html`<input type="date" name="date" value="${m?.date || s.today()}" max="${s.today()}">`)}</div>
     ${field(['loss', 'adjust_in', 'adjust_out'].includes(tt) ? 'Lý do (bắt buộc)' : 'Ghi chú', html`<textarea name="note" rows="2" placeholder="${tt === 'loss' ? 'VD: chết 1 con yếu' : ''}">${m?.note || ''}</textarea>`)}
-    ${tt === 'in_breeding' ? html`<p class="def">Sau khi nhập, nhớ cập nhật nhật ký lồng sinh sản (giảm "chim non hiện tại", tăng "đã ra ràng") để không bị tính trùng.</p>` : ''}
+    ${tt === 'in_breeding' ? html`<p class="def">${s.smartCards && !m ? 'Chọn lứa đang mở: chim non của lứa tự giảm đúng số này khi lưu. Số đã ghi ra ràng trước đó mà chưa nhập thì không trừ lại. Không chọn lứa: chỉ tăng lồng phóng.' : 'Sau khi nhập, nhớ cập nhật nhật ký lồng sinh sản (giảm "chim non hiện tại", tăng "đã ra ràng") để không bị tính trùng.'}</p>` : ''}
     <div class="form-msg" data-msg></div></form>`;
   openSheet({
     title: (m ? 'Sửa: ' : '') + titles[t],
@@ -239,11 +241,24 @@ export function openMovementForm(app, { type, penId, movement = null }) {
       });
       el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => {
         const v = formValues(el.querySelector('[data-f]'));
+        // Chim non của lứa đang mở: giảm tổ và tăng lồng phóng trong 1 giao dịch ở máy chủ
+        const srcClutch = !m && v.type === 'in_breeding' && s.smartCards && v.source_clutch_id ? s.byId('clutches', v.source_clutch_id) : null;
+        if (srcClutch?.status === 'open') {
+          const sm = clutchSummary(srcClutch, s.db.daily_logs);
+          const waiting = Math.max(0, sm.fledged - movedToPens(s.db.stock_movements, srcClutch.id));
+          const qty = toInt(v.qty, 0);
+          if (qty > waiting) {
+            const r = await s.brood('brood_clutch_fledge', { request_id: requestId, clutch_id: srcClutch.id, qty, to_pen_id: v.to_pen_id, event_date: v.date, note: v.note });
+            if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);
+            toast(r.result?.duplicate ? 'Thao tác này đã được lưu trước đó — không ghi trùng' : 'Đã lưu biến động'); close();
+            return;
+          }
+        }
         const plan = planMovement(s.db, { ...v, id: m?.id, qty: toInt(v.qty, 0) }, s.ctx());
         const r = await s.run(plan, { requires: m ? 'delete' : 'stock.write' });
         if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);
         toast('Đã lưu biến động'); close();
-        if (v.type === 'in_breeding' && v.source_cage_id && !m) {
+        if (v.type === 'in_breeding' && v.source_cage_id && !m && !s.smartCards) {
           const cage = s.byId('cages', v.source_cage_id);
           if (await confirmDialog(`Mở "Cập nhật hôm nay" cho ${cage.code} để giảm số chim non hiện tại?`, { ok: 'Mở nhật ký' })) openDailyForm(app, cage.id, { date: s.today() });
         }
@@ -255,7 +270,7 @@ export function openMovementForm(app, { type, penId, movement = null }) {
 function clutchOpts(s, cageId, sel) {
   if (!cageId) return raw('<option value="">— Chọn lồng trước —</option>');
   const list = s.db.clutches.filter((c) => c.cage_id === cageId && !c.deleted).sort((a, b) => b.start_date.localeCompare(a.start_date));
-  return raw(`<option value="">— Không rõ —</option>${list.map((c) => `<option value="${esc(c.id)}"${c.id === sel || (!sel && c.status !== 'closed') ? ' selected' : ''}>${esc(c.code)} (${c.status === 'closed' ? 'đã kết thúc' : 'đang mở'})</option>`).join('')}`);
+  return raw(`<option value="">— Không rõ —</option>${list.map((c) => `<option value="${esc(c.id)}"${c.id === sel || (!sel && c.status !== 'closed') ? ' selected' : ''}>${esc(clutchTitle(c))} (${c.status === 'closed' ? 'đã kết thúc' : 'đang mở'})</option>`).join('')}`);
 }
 
 export { currentPair, badge };

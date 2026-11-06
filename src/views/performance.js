@@ -2,7 +2,7 @@ import { html } from '../ui/html.js';
 import { icon } from '../ui/icons.js';
 import { nestArt } from '../ui/brand.js';
 import { empty, badge, thumb } from '../ui/components.js';
-import { clutchSummary, pairPerformance, logsOfClutch, STAGE_LABELS, METRIC_LABELS, METRIC_KIND, KIND_LABELS, METRIC_ORDER, chickMismatch, inFarmStats } from '../domain/breeding.js';
+import { clutchSummary, pairPerformance, logsOfClutch, STAGE_LABELS, METRIC_LABELS, METRIC_KIND, KIND_LABELS, METRIC_ORDER, chickMismatch, inFarmStats, clutchTitle } from '../domain/breeding.js';
 import { fmtDate, addDays } from '../core/dates.js';
 import { fmtPct } from '../core/format.js';
 import { logCard } from './cages.js';
@@ -72,7 +72,7 @@ export function renderClutch(app, { id }) {
   const mm = c.legacy_inferred ? null : chickMismatch(c.code, sm);
   const canEdit = s.can('clutch.edit');
   return {
-    html: html`<div class="page-head"><a class="back" href="#/cage/${c.cage_id}?tab=clutches">${icon('back')}</a><div class="grow"><h1>Lứa ${c.code}</h1><div class="sub">${STAGE_LABELS[sm.stage]}</div></div></div>
+    html: html`<div class="page-head"><a class="back" href="#/cage/${c.cage_id}?tab=clutches">${icon('back')}</a><div class="grow"><h1>${clutchTitle(c)}</h1><div class="sub">${STAGE_LABELS[sm.stage]}</div></div>${s.smartCards ? html`<button class="btn soft sm" data-report>${icon('info')} Báo cáo lứa</button>` : ''}</div>
       <div class="card"><dl class="kv">
         <dt>Mã lứa</dt><dd>${c.code}</dd><dt>Lồng</dt><dd><a href="#/cage/${c.cage_id}">${cage?.code}</a></dd>
         <dt>Bố</dt><dd>${pair ? html`<a href="#/bird/${pair.male_id}">${s.birdName(pair.male_id)}</a>` : 'Chưa ghi nhận'}</dd>
@@ -94,6 +94,7 @@ export function renderClutch(app, { id }) {
         const b = e.target.closest('[data-edit-log]');
         if (b) import('./breeding-forms.js').then((m) => m.openDailyForm(app, b.dataset.cageId, { logId: b.dataset.editLog }));
         if (e.target.closest('[data-edit-start]')) import('./breeding-forms.js').then((m) => m.openEditClutchStart(app, id));
+        if (e.target.closest('[data-report]')) import('./clutch-ui.js').then((m) => m.openClutchReport(app, id));
       });
     },
   };

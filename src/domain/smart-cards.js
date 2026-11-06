@@ -3,7 +3,7 @@
 // Nguyên tắc: không suy ra ngày đẻ / ngày nở khi không có dữ liệu, không tự chuyển trạng thái chỉ vì đủ ngày.
 
 import { daysBetween, addDays, isISODate } from '../core/dates.js';
-import { logsOfClutch, clutchSummary, openClutch, planDailySave, clutchForDate, pickSnapshot, chickBalance, pickOut, SNAPSHOT_FIELDS } from './breeding.js';
+import { logsOfClutch, clutchSummary, openClutches, planDailySave, clutchForDate, pickSnapshot, chickBalance, pickOut, clutchTitle, SNAPSHOT_FIELDS } from './breeding.js';
 import { activeGroups, ageInfo, cageEvents, LOSS_REASONS } from './brood.js';
 
 export const EGG_MIN_DAYS = 18;
@@ -20,9 +20,12 @@ export const CHICK_MILESTONES = [
 
 const active = (e) => !e.reversed_by && e.type !== 'reverse';
 
-/** Mốc bắt đầu theo dõi của lồng: lứa đang mở, hoặc sau lứa đã kết thúc gần nhất. */
-function cycleStart(db, cageId, clutch) {
-  if (clutch) return clutch.start_date;
+// Một lứa hoặc danh sách các lứa đang mở của lồng
+const asList = (c) => (Array.isArray(c) ? c : c ? [c] : []);
+
+/** Mốc bắt đầu theo dõi của lồng: lứa đang mở cũ nhất, hoặc sau lứa đã kết thúc gần nhất. */
+function cycleStart(db, cageId, clutches) {
+  if (clutches.length) return clutches.map((c) => c.start_date).sort()[0];
   const closed = db.clutches.filter((c) => c.cage_id === cageId && !c.deleted && c.status === 'closed' && c.end_date).map((c) => c.end_date).sort();
   return closed.length ? closed[closed.length - 1] : null;
 }
@@ -33,15 +36,16 @@ function cycleStart(db, cageId, clutch) {
  * 'original' (xanh) khi có lứa chưa phát sinh đảo tổ; 'none' (trung tính) khi lồng chưa có lứa.
  */
 export function fosterState(db, cageId, clutch) {
-  const start = cycleStart(db, cageId, clutch);
+  const list = asList(clutch);
+  const start = cycleStart(db, cageId, list);
   const ev = cageEvents(db, cageId).filter((e) => active(e) && (e.type === 'transfer' || e.type === 'create')
     && (!start || e.event_date >= start)
-    && !(clutch && e.source_clutch_id && e.source_clutch_id !== clutch.id));
+    && !(list.length && e.source_clutch_id && !list.some((c) => c.id === e.source_clutch_id)));
   const groups = activeGroups(db, cageId);
   const inN = ev.filter((e) => e.to_cage_id === cageId).reduce((a, e) => a + e.qty, 0);
   const outN = ev.filter((e) => e.type === 'transfer' && e.from_cage_id === cageId).reduce((a, e) => a + e.qty, 0);
   const mixed = ev.length > 0 || groups.length > 0;
-  return { state: mixed ? 'mixed' : clutch ? 'original' : 'none', inN, outN, groupCount: groups.length };
+  return { state: mixed ? 'mixed' : list.length ? 'original' : 'none', inN, outN, groupCount: groups.length };
 }
 
 /** Lần soi trứng còn hiệu lực của lồng (thuộc lứa hiện tại). */
@@ -57,10 +61,25 @@ export function latestEggCheck(db, cageId, clutch) {
 export function eggBreakdown(db, cageId, brood) {
   const total = brood.eggs;
   if (!total) return { total: 0, fertile: 0, notSeen: 0, unchecked: 0, check: null };
-  const check = latestEggCheck(db, cageId, brood.clutch);
-  const ownLog = brood.own?.latest || null;
-  const groups = brood.eggSegments.filter((s) => s.group).map((s) => s.group);
-  const ownFertile = ownLog ? Math.min(Math.max(0, (Number(ownLog.fertile) || 0) - (Number(ownLog.hatched) || 0)), brood.own.eggs) : 0;
+  const holders = (brood.parts || []).filter((p) => p.own?.eggs);
+  // Nhiều lứa còn trứng: mỗi lứa có lần soi riêng, cộng lại (nhóm tính một phần riêng)
+  if (holders.length > 1) {
+    const groupSegs = brood.eggSegments.filter((s) => s.group);
+    const piece = [
+      ...holders.map((p) => eggsOfOne(db, cageId, p.clutch, p.own, [], p.own.eggs)),
+      ...(groupSegs.length ? [eggsOfOne(db, cageId, null, null, groupSegs.map((s) => s.group), groupSegs.reduce((a, s) => a + s.qty, 0))] : []),
+    ];
+    const add = (k) => piece.reduce((a, x) => a + x[k], 0);
+    return { total, fertile: add('fertile'), notSeen: add('notSeen'), unchecked: add('unchecked'), check: piece.map((x) => x.check).filter(Boolean).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0] || null };
+  }
+  const one = holders[0] || { clutch: brood.clutch, own: brood.own };
+  return eggsOfOne(db, cageId, one.clutch, one.own, brood.eggSegments.filter((s) => s.group).map((s) => s.group), total);
+}
+
+function eggsOfOne(db, cageId, clutch, own, groups, total) {
+  const check = latestEggCheck(db, cageId, clutch);
+  const ownLog = own?.latest || null;
+  const ownFertile = ownLog ? Math.min(Math.max(0, (Number(ownLog.fertile) || 0) - (Number(ownLog.hatched) || 0)), own.eggs) : 0;
   const groupFertile = groups.filter((g) => g.egg_check === 'fertile_seen').reduce((a, g) => a + g.qty, 0);
   const logged = ownFertile + groupFertile;
   let fertile; let notSeen;
@@ -88,7 +107,7 @@ function cohortsOf(clutch, logs, field) {
     if (v > prev) {
       const firstOfLegacy = !prevDate && (l.legacy || clutch.legacy_inferred);
       const noBaseline = !prevDate && field === 'hatched';
-      const from = firstOfLegacy || noBaseline ? null : prevDate ? addDays(prevDate, 1) : clutch.start_date;
+      const from = firstOfLegacy || noBaseline ? null : prevDate ? addDays(prevDate, 1) : (clutch.first_egg_date || clutch.start_date);
       out.push({ key: l.log_date, qty: v - prev, from: from && from <= l.log_date ? from : (from ? l.log_date : null), to: firstOfLegacy || noBaseline ? null : l.log_date });
     }
     if (v > prev) prev = v;
@@ -133,25 +152,25 @@ function chickProgress(age) {
 /** Các thanh tiến độ của lồng. Số thanh phụ thuộc dữ liệu; tuổi tính theo ngày hôm nay nên tự tăng, không cần cập nhật. */
 export function progressBars(db, cageId, today, brood) {
   const bars = [];
-  const clutch = brood.clutch;
-  const logs = clutch ? logsOfClutch(db.daily_logs, clutch.id) : [];
-  const base = { clutch };
-  if (brood.own?.eggs) {
-    for (const c of allocateNewest(cohortsOf(clutch, logs, 'eggs'), brood.own.eggs)) {
+  const parts = brood.parts || (brood.clutch ? [{ clutch: brood.clutch, own: brood.own }] : []);
+  for (const { clutch, own } of parts) {
+    if (!own?.eggs) continue;
+    for (const c of allocateNewest(cohortsOf(clutch, logsOfClutch(db.daily_logs, clutch.id), 'eggs'), own.eggs)) {
       const r = refOf(db, clutch, 'egg', c.key);
       const p = eggProgress(r && (r.incubate_date || r.laid_date) ? { incubate: r.incubate_date, laid: r.laid_date } : { laid: c.from, laidTo: c.to }, today);
-      bars.push({ ...base, ...p, id: `own-egg-${c.key}`, kind: 'egg', qty: c.qty, own: true, cohort: c.key, source: 'clutch:egg', label: `Lứa ${clutch.code}`, ref: r });
+      bars.push({ clutch, ...p, id: `own-egg-${clutch.id}-${c.key}`, kind: 'egg', qty: c.qty, own: true, cohort: c.key, source: `clutch:${clutch.id}:egg`, label: clutchTitle(clutch), ref: r });
     }
   }
   for (const s of brood.eggSegments.filter((x) => x.group)) {
     const g = s.group;
     bars.push({ ...eggProgress({ incubate: g.incubate_date, laid: g.laid_date, laidTo: g.laid_date_to }, today), id: `grp-${g.id}`, kind: 'egg', qty: g.qty, own: false, group: g, source: `group:${g.id}`, label: s.label });
   }
-  if (brood.own?.chicks) {
-    for (const c of allocateNewest(cohortsOf(clutch, logs, 'hatched'), brood.own.chicks)) {
+  for (const { clutch, own } of parts) {
+    if (!own?.chicks) continue;
+    for (const c of allocateNewest(cohortsOf(clutch, logsOfClutch(db.daily_logs, clutch.id), 'hatched'), own.chicks)) {
       const r = refOf(db, clutch, 'chick', c.key);
       const age = r?.hatch_date ? ageInfo(r, today) : ageInfo(c.from ? { hatch_date: c.from, hatch_date_to: c.to, hatch_basis: 'estimated' } : null, today);
-      bars.push({ ...base, ...chickProgress(age), id: `own-chick-${c.key}`, kind: 'chick', qty: c.qty, own: true, cohort: c.key, source: 'clutch:chick', label: `Lứa ${clutch.code}`, ref: r });
+      bars.push({ clutch, ...chickProgress(age), id: `own-chick-${clutch.id}-${c.key}`, kind: 'chick', qty: c.qty, own: true, cohort: c.key, source: `clutch:${clutch.id}:chick`, label: clutchTitle(clutch), ref: r });
     }
   }
   for (const s of brood.segments.filter((x) => x.group)) {
@@ -165,19 +184,21 @@ export function progressBars(db, cageId, today, brood) {
  * Trứng hỏng nhập từ báo cáo ngày không có nguyên nhân ⇒ "chưa ghi nguyên nhân". Phần chim non chưa khớp KHÔNG tính là chết.
  */
 export function lossSummary(db, cageId, clutch) {
-  const start = cycleStart(db, cageId, clutch);
-  const sum = clutch ? clutchSummary(clutch, db.daily_logs) : null;
+  const list = asList(clutch);
+  const start = cycleStart(db, cageId, list);
+  const sums = list.map((c) => clutchSummary(c, db.daily_logs));
+  const damaged = sums.reduce((a, s) => a + s.damaged, 0);
   const ev = (db.brood_events || []).filter((e) => e.type === 'loss' && active(e) && e.from_cage_id === cageId && (!start || e.event_date >= start)
-    && !(clutch && e.source_clutch_id && e.source_clutch_id !== clutch.id));
+    && !(list.length && e.source_clutch_id && !list.some((c) => c.id === e.source_clutch_id)));
   const rows = {};
   const add = (kind, label, qty) => { const k = `${kind}|${label}`; rows[k] = { kind, label, qty: (rows[k]?.qty || 0) + qty }; };
   for (const e of ev) add(e.kind, LOSS_REASONS[e.kind]?.[e.reason] || e.reason, e.qty);
   const ownEggEvents = ev.filter((e) => e.kind === 'egg' && !e.group_id).reduce((a, e) => a + e.qty, 0);
   const groupEggs = ev.filter((e) => e.kind === 'egg' && e.group_id).reduce((a, e) => a + e.qty, 0);
-  const noReason = Math.max(0, (sum?.damaged || 0) - ownEggEvents);
+  const noReason = Math.max(0, damaged - ownEggEvents);
   if (noReason) add('egg', 'Trứng hỏng (chưa ghi nguyên nhân)', noReason);
   const chicks = ev.filter((e) => e.kind === 'chick').reduce((a, e) => a + e.qty, 0);
-  return { eggs: (sum?.damaged || 0) + groupEggs, chicks, rows: Object.values(rows), unaccounted: sum ? Math.max(0, chickBalance(sum).unaccounted) : 0 };
+  return { eggs: damaged + groupEggs, chicks, rows: Object.values(rows), unaccounted: sums.reduce((a, s) => a + Math.max(0, chickBalance(s).unaccounted), 0) };
 }
 
 /**
@@ -201,7 +222,7 @@ export function clutchQuality(db, clutch) {
     hatched: s.hatched + sum(mine.filter((e) => e.type === 'hatch')),
     eggsLost: s.damaged + sum(mine.filter((e) => e.type === 'loss' && e.kind === 'egg' && e.group_id)),
     chicksDead: sum(mine.filter((e) => e.type === 'loss' && e.kind === 'chick')),
-    fledged: s.fledged + sum(mine.filter((e) => e.type === 'fledge')),
+    fledged: s.fledged + sum(mine.filter((e) => e.type === 'fledge' && e.group_id)), // ra ràng của lứa đã nằm trong nhật ký
     weaned: sum(mine.filter((e) => e.type === 'wean')),
     movedOut: s.eggs_out + s.chicks_out,
     movedIn: sum(ev.filter((e) => e.type === 'transfer' && e.to_cage_id === clutch.cage_id && e.event_date >= clutch.start_date && e.event_date <= end)),
@@ -236,13 +257,17 @@ export function checkCounter(rows) {
 
 /**
  * "+ Thêm" nhanh: cộng vào số TỔNG của lứa rồi lưu bằng đúng đường của "Cập nhật hôm nay" (planDailySave: chống ghi đè, tạo lứa khi cần).
- * input: { cage_id, type: 'egg'|'hatch', qty, date }
+ * input: { cage_id, clutch_id?, type: 'egg'|'hatch', qty, date }
+ * Không chọn lứa: trứng mới vào lứa mới nhất; chim non mới nở từ lứa cũ nhất còn trứng.
  */
 export function planQuickAdd(db, input, ctx) {
   const qty = Number(input.qty);
   if (!Number.isInteger(qty) || qty <= 0) return { errors: ['Số lượng phải là số nguyên lớn hơn 0'], warnings: [], ops: [] };
   const date = input.date || ctx.today;
-  const clutch = clutchForDate(db.clutches, input.cage_id, date) || openClutch(db.clutches, input.cage_id);
+  const open = openClutches(db.clutches, input.cage_id);
+  const clutch = (input.clutch_id && open.find((c) => c.id === input.clutch_id))
+    || (input.type === 'hatch' && open.find((c) => clutchSummary(c, db.daily_logs).pending > 0))
+    || clutchForDate(db.clutches, input.cage_id, date) || open[open.length - 1] || null;
   const logs = clutch ? logsOfClutch(db.daily_logs, clutch.id) : [];
   const latest = logs[logs.length - 1] || null;
   if (latest && latest.log_date > date) return { errors: [`Lứa đã có nhật ký ngày ${latest.log_date} — sửa nhật ký ngày đó thay vì thêm vào ngày cũ hơn`], warnings: [], ops: [] };
@@ -256,7 +281,7 @@ export function planQuickAdd(db, input, ctx) {
   const existing = latest?.log_date === date ? latest : null;
   const snapshot = Object.fromEntries(SNAPSHOT_FIELDS.map((f) => [f, snap[f]]));
   return planDailySave(db, {
-    id: existing?.id, cage_id: input.cage_id, log_date: date, snapshot,
+    id: existing?.id, cage_id: input.cage_id, clutch_id: clutch?.id, log_date: date, snapshot,
     parents_status: existing?.parents_status || latest?.parents_status, nest_status: existing?.nest_status || latest?.nest_status,
     note: input.note || '', photo_ids: existing?.photo_ids || [],
     newClutch: clutch ? null : { start_date: date }, expectedVersion: existing ? (existing.version || 0) : null,

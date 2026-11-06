@@ -7,6 +7,7 @@ const LABELS = {
   log_date: 'Ngày', eggs: 'Trứng đã đẻ', fertile: 'Có cồ', infertile: 'Không cồ', damaged: 'Hỏng', hatched: 'Đã nở', chicks: 'Chim non', fledged: 'Ra ràng',
   parents_status: 'Bố mẹ', nest_status: 'Tổ', photo_ids: 'Ảnh', text: 'Nội dung', note_date: 'Ngày ghi chú', deleted: 'Đã xoá',
   needs_action: 'Cần xử lý', resolved_at: 'Xử lý lúc', name: 'Tên', purpose: 'Mục đích', archived: 'Ngừng sử dụng',
+  pair_seq: 'Số thứ tự lứa', start_date: 'Ngày bắt đầu', first_egg_date: 'Ngày đẻ trứng đầu tiên', end_date: 'Ngày kết thúc', status: 'Trạng thái', end_reason: 'Lý do kết thúc', close_note: 'Ghi chú khi kết thúc', close_report: 'Số liệu chốt',
 };
 const show = (v) => {
   if (v === null || v === undefined || v === '') return 'trống';

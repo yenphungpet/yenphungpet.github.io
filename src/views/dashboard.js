@@ -13,7 +13,7 @@ export function render(app) {
   const tasks = todayTasks(s.db, today, s.settings, s.role, (id) => s.userName(id));
   const hour = new Date().getHours();
   const greet = hour < 11 ? 'Chào buổi sáng' : hour < 14 ? 'Chào buổi trưa' : hour < 18 ? 'Chào buổi chiều' : 'Chào buổi tối';
-  const pen = (i) => m.pens[i] || { pen: { name: `Lồng phóng ${i + 1}`, purpose: '' }, qty: 0 };
+  const fresh = s.adapter.kind === 'demo' || !s.lastLoad ? null : s.stale ? html`<p class="msg warn">${icon('alert')} <span>${s.status.message}. Số dưới đây có thể chưa mới.</span></p>` : html`<p class="small muted">Số liệu từ máy chủ lúc ${new Date(s.lastLoad).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</p>`;
   const canFin = s.can('finance.read');
 
   return { html: html`
@@ -23,18 +23,19 @@ export function render(app) {
       <p>${heroLine(tasks.length, alertCount(alerts))}</p></div>
     </section>
 
+    ${fresh}
     <div class="section"><h2>Lồng sinh sản</h2><a href="#/cages">Xem tất cả</a></div>
     <div class="stats">
       ${statTile('Tổng lồng sinh sản', m.cages, { href: '#/cages', def: METRIC_DEFS.cages })}
       ${statTile('Đang hoạt động', m.activeCages, { tone: 'green', href: '#/cages?f=active', def: METRIC_DEFS.activeCages, sub: 'có lứa đang mở' })}
       ${statTile('Cặp đang nghỉ', m.resting, { href: '#/cages?f=resting', def: METRIC_DEFS.resting })}
-      ${statTile('Trứng đang theo dõi', m.eggs, { tone: 'gold', href: '#/cages?f=incubating', def: METRIC_DEFS.eggs, sub: 'chờ kết quả' })}
-      ${statTile('Chim non', m.chicks, { tone: 'green', href: '#/cages?f=rearing', def: METRIC_DEFS.chicks, sub: 'trong lồng sinh sản' })}
-      ${statTile(pen(0).pen.name, pen(0).qty, { href: pen(0).pen.id ? `#/pen/${pen(0).pen.id}` : '#/pens', def: METRIC_DEFS.pen, sub: pen(0).pen.purpose })}
-      ${statTile(pen(1).pen.name, pen(1).qty, { href: pen(1).pen.id ? `#/pen/${pen(1).pen.id}` : '#/pens', def: METRIC_DEFS.pen, sub: pen(1).pen.purpose })}
-      ${statTile('Lồng Chim Giống', m.breeders.inBreederPen, { tone: 'gold', href: '#/breeders', def: METRIC_DEFS.breederPen, sub: `+ ${m.breeders.paired} con đang ghép ở lồng SS` })}
+      ${statTile('Trứng đang có', m.eggs, { tone: 'gold', href: '#/cages?f=incubating', def: METRIC_DEFS.eggs, sub: 'còn trong tổ' })}
+      ${statTile('Chim non đang có', m.chicks, { tone: 'green', href: '#/cages?f=rearing', def: METRIC_DEFS.chicks, sub: 'trong tổ sinh sản' })}
+      ${statTile('Chim lồng phóng', m.penTotal, { href: '#/pens', def: METRIC_DEFS.penTotal, sub: `${m.pens.length} lồng đang dùng${m.penOriginUnknown ? ` · ${m.penOriginUnknown} con chưa rõ nguồn gốc` : ''}` })}
+      ${statTile('Chim có thể bán', m.saleable.known ? m.saleable.qty : '—', { def: METRIC_DEFS.saleable, sub: m.saleable.known ? 'đã xác nhận đủ điều kiện' : 'Chưa xác định' })}
+      ${statTile('Chim giống', m.breeders.total, { tone: 'gold', href: '#/breeders', def: METRIC_DEFS.breederTotal, sub: `${m.breeders.paired} đang ghép · ${m.breeders.inBreederPen} ở Lồng Chim Giống` })}
     </div>
-    <p class="def">Cách tính: trứng đang theo dõi = trứng đã đẻ − đã nở − hỏng − không cồ (chỉ lứa đang mở; khớp tổng ô “Chờ kết quả” trên thẻ lồng). Chim non chỉ tính chim còn trong lồng sinh sản (tổng ô “Non hiện tại”); chim đã chuyển ra lồng phóng được tính ở lồng phóng — không cộng trùng. Các số cộng dồn của lứa (trứng đẻ, đã nở, ra ràng) không cộng vào Tổng quan — xem ở thẻ lồng / Hiệu suất. Lồng Chim Giống không gồm chim đang ghép.</p>
+    <p class="def">Cách tính: trứng đang có = trứng đã đẻ − đã nở − hỏng − không cồ − đã chuyển đi, của mọi lứa đang mở, cộng nhóm trứng nhận từ lồng khác; khớp tổng ô Trứng trên thẻ lồng. Chim non chỉ tính chim còn trong tổ; chim đã ra lồng phóng tính ở lồng phóng, không cộng trùng. Chuyển giữa các lồng phóng không đổi tổng. Chim có thể bán chỉ tính chim đã xác nhận đủ điều kiện, không suy từ số chim lồng phóng. Mỗi chim giống đếm một lần.</p>
 
     <div class="section"><h2>Việc cần làm hôm nay</h2><a href="#/checklist">Checklist</a></div>
     <div class="card">
@@ -63,6 +64,10 @@ export function render(app) {
           <span class="grow"><span class="title">Kho & thức ăn sắp hết</span><br>
           <span class="desc">${alerts.lowStock.length ? alerts.lowStock.map((x) => `${x.item.name}: ${String(x.balance).replace('.', ',')} ${x.item.unit}`).join(' · ') : 'Không có vật tư dưới ngưỡng'}</span></span>
           ${badge(alerts.lowStock.length, alerts.lowStock.length ? 'danger' : 'ok')}</a>
+        ${m.penReconcile.qty ? html`<a class="row" href="#/pens" data-pen-reconcile><span class="row-icon gold">${icon('alert')}</span>
+          <span class="grow"><span class="title">Lồng phóng đã ngừng dùng còn số chim trên sổ</span><br>
+          <span class="desc">${m.penReconcile.qty} con ở ${m.penReconcile.pens} lồng. Không cộng vào tổng. Cần đối soát số chim này đang ở đâu; app không tự đổi số.</span></span>
+          ${badge(m.penReconcile.qty, 'warn')}</a>` : ''}
         ${alerts.warnings.length ? html`<a class="row" href="#/cages?f=warn"><span class="row-icon red">${icon('alert')}</span>
           <span class="grow"><span class="title">Bất thường trong nhật ký gần nhất</span><br>
           <span class="desc">${alerts.warnings.map((x) => `${x.cage.code}: ${x.warnings.join(', ')}`).join(' · ')}</span></span>
@@ -83,5 +88,5 @@ export function render(app) {
       ${statTile('Chênh lệch thu − chi', fmtMoneyShort(m.month.diff), { href: '#/finance', sub: 'không phải lợi nhuận ròng' })}
       ${statTile('Công nợ phải thu', fmtMoneyShort(m.debt.receivable), { tone: 'gold', href: '#/sales?f=debt', sub: `${m.debt.count} đơn${m.debt.refundDue ? ` · cần hoàn ${fmtMoneyShort(m.debt.refundDue)}` : ''}` })}
     </div>` : html`<p class="def">${icon('shield')} Thống kê thu chi chỉ hiển thị với vai trò Chủ trại.</p>`}
-  ` };
+  `, mount() { if (Date.now() - (s.lastProbe || 0) > 10000) s.probeFreshness().catch(() => {}); } };
 }

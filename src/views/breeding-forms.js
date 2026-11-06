@@ -3,10 +3,12 @@ import { icon } from '../ui/icons.js';
 import { openSheet, field, stepper, options, showMessages, formValues, busy, toast, confirmDialog } from '../ui/components.js';
 import { photoPickerHtml, mountPhotoPicker, photosReady } from '../ui/photo-picker.js';
 import {
-  SNAPSHOT_FIELDS, PARENT_STATUS, NEST_STATUS, planDailySave, planCloseClutch, planStartRest, planUpdateRest,
+  SNAPSHOT_FIELDS, PARENT_STATUS, NEST_STATUS, planDailySave, planStartRest, planUpdateRest,
   planDeleteLog, planEditClutchStart, clutchForDate, logsOfClutch, pickSnapshot, snapshotDelta, describeDelta,
-  clutchSummary, currentPair, validateSnapshot, planCageSave,
+  clutchSummary, currentPair, validateSnapshot, planCageSave, openClutches, clutchTitle, logOfDay,
 } from '../domain/breeding.js';
+import { planFinishClutch } from '../domain/clutch-report.js';
+import { openClutchReport } from './clutch-ui.js';
 import { fmtDate, addDays, isISODate } from '../core/dates.js';
 import { toInt } from '../core/format.js';
 import { uid } from '../core/ids.js';
@@ -20,54 +22,68 @@ const HINTS = {
 };
 const LABELS = { eggs: 'Trứng đã đẻ', fertile: 'Trứng có cồ', infertile: 'Trứng không cồ', damaged: 'Trứng hỏng', hatched: 'Trứng đã nở', chicks: 'Chim non hiện tại', fledged: 'Chim đã ra ràng' };
 
-/** Cập nhật hôm nay / Sửa nhật ký. opts: { date } hoặc { logId } */
+/** Cập nhật hôm nay / Sửa nhật ký. opts: { date } hoặc { logId }. Lồng có 2 lứa chồng nhau: mỗi lứa một phần số liệu, lưu cùng lúc. */
 export function openDailyForm(app, cageId, opts = {}) {
   const store = app.store;
   if (!store.can('breeding.write')) { toast('Vai trò hiện tại không được ghi nhật ký', 'error'); return; }
   const cage = store.byId('cages', cageId);
-  let state = { date: opts.date || store.today(), logId: opts.logId || null };
+  let state = { date: opts.date || store.today(), logId: opts.logId || null, focus: 0 };
   if (state.logId) state.date = store.byId('daily_logs', state.logId)?.log_date || state.date;
+  const editing = state.logId ? store.byId('daily_logs', state.logId) : null;
+  if (editing?.clutch_id && store.byId('clutches', editing.clutch_id)?.status === 'closed' && !store.can('clutch.edit')) { toast('Lứa đã kết thúc — chỉ chủ trại được sửa số liệu', 'error'); return; }
   let picker = null;
   let ackWarnings = false;
   let openedVersion = null; // phiên bản bản ghi lúc mở biểu mẫu (chống ghi đè khi thiết bị khác vừa sửa)
+  const versions = {}; // như trên, theo từng lứa khi lồng có 2 lứa chồng nhau
 
-  const ctxFor = (date, logId) => {
+  // Các lứa nhập cùng biểu mẫu: chỉ khi ghi theo ngày và ngày đó có từ 2 lứa đang mở
+  const multiSet = () => (state.logId ? [] : openClutches(store.db.clutches, cageId).filter((c) => c.start_date <= state.date));
+
+  const ctxFor = (date, logId, clutchId = null) => {
     const db = store.db;
-    const existing = logId ? db.daily_logs.find((l) => l.id === logId && !l.deleted)
-      : db.daily_logs.find((l) => l.cage_id === cageId && l.log_date === date && !l.deleted);
-    const clutch = existing?.clutch_id ? store.byId('clutches', existing.clutch_id) : clutchForDate(db.clutches, cageId, date);
+    const target = clutchId || clutchForDate(db.clutches, cageId, date)?.id || null;
+    const existing = logId ? db.daily_logs.find((l) => l.id === logId && !l.deleted) : logOfDay(db.daily_logs, cageId, date, target);
+    const clutch = existing?.clutch_id ? store.byId('clutches', existing.clutch_id) : (clutchId ? store.byId('clutches', clutchId) : clutchForDate(db.clutches, cageId, date));
     const prev = clutch ? logsOfClutch(db.daily_logs, clutch.id).filter((l) => l.log_date < date).pop() || null : null;
     const values = existing ? pickSnapshot(existing) : pickSnapshot(clutch ? (logsOfClutch(db.daily_logs, clutch.id).filter((l) => l.log_date <= date).pop()) : null);
     return { existing, clutch, prev, values };
   };
 
+  const numbers = (c, ex, suffix, label) => html`<fieldset class="fieldset ${suffix && suffix !== `__${state.focus}` ? 'hidden' : ''}" data-numbers="${suffix}"><legend>${label}</legend>
+        <p class="small muted" style="margin:0">Nhập con số tổng hiện tại, không nhập số phát sinh trong ngày. ${ex ? 'Đang hiển thị số đã lưu của ngày này.' : c.prev ? `Đã điền sẵn theo lần ghi ${fmtDate(c.prev.log_date)} — chỉ sửa ô có thay đổi.` : ''}</p>
+        ${(() => { const o = ex || (c.clutch ? logsOfClutch(store.db.daily_logs, c.clutch.id).filter((l) => l.log_date <= state.date).pop() : null);
+          return o && (o.eggs_out || o.chicks_out) ? html`<div class="msg info">${icon('swap')} <div>Lứa đã chuyển sang lồng khác: <b>${o.eggs_out || 0} trứng · ${o.chicks_out || 0} chim non</b> (máy chủ tự trừ khi chuyển). "Chim non hiện tại" chỉ đếm chim của lứa còn trong lồng này — không tính nhóm nhận từ lồng khác.</div></div>` : ''; })()}
+        ${SNAPSHOT_FIELDS.map((f) => (store.groupsEnabled && f === 'chicks'
+          ? stepper(`${f}${suffix}`, 'Chim non CỦA LỨA còn trong lồng', c.values[f], { hint: 'Không tính chim nhận từ lồng khác' })
+          : stepper(`${f}${suffix}`, LABELS[f], c.values[f], { hint: HINTS[f] })))}
+        <div class="delta-preview" data-delta></div>
+      </fieldset>`;
+
   const body = () => {
-    const c = ctxFor(state.date, state.logId);
+    const set = multiSet();
+    const multi = set.length > 1;
+    const c = ctxFor(state.date, state.logId, multi ? set[state.focus].id : null);
     const ex = c.existing;
     const noPair = !c.clutch && !currentPair(store.db.pairs, cageId);
     openedVersion = ex ? (ex.version || 0) : null;
+    if (multi) for (const k of set) versions[k.id] = ctxFor(state.date, null, k.id).existing?.version ?? null;
     return html`<form class="form" data-daily novalidate>
       <div class="grid2">
         ${field('Ngày cập nhật', html`<input type="date" name="log_date" value="${state.date}" max="${store.today()}" required>`)}
         <div class="field"><span>Chế độ</span><div class="badge ${ex ? 'warn' : 'ok'}" style="min-height:48px;justify-content:center;font-size:13px">${ex ? `Sửa bản ghi ${fmtDate(ex.log_date)}` : 'Bản ghi mới'}</div></div>
       </div>
-      ${ex ? html`<div class="msg info">${icon('info')} Ngày này đã có nhật ký. Lưu sẽ CẬP NHẬT bản ghi cũ (giữ nguyên ID), không tạo bản ghi trùng.</div>` : ''}
-      ${noPair ? html`<div class="msg warn">${icon('info')} <div>Lồng <b>${cage.code}</b> chưa ghép cặp bố mẹ nên chưa ghi được trứng/lứa. Bạn vẫn có thể ghi <b>ghi chú và ảnh</b>. <button type="button" class="btn soft sm" data-go-pair style="margin-top:6px">${icon('plus')} Ghép cặp ngay</button></div></div>`
+      ${multi ? html`<div class="chips sc-clutch-tabs" role="tablist">${set.map((k, i) => html`<button type="button" class="chip ${i === state.focus ? 'active' : ''}" data-focus="${i}">${clutchTitle(k)}</button>`)}</div>
+        <p class="small muted">Lồng có ${set.length} lứa chồng nhau. Mỗi lứa có số riêng, bấm Lưu một lần là lưu cả ${set.length} lứa.</p>` : ''}
+      ${ex && !multi ? html`<div class="msg info">${icon('info')} Ngày này đã có nhật ký. Lưu sẽ CẬP NHẬT bản ghi cũ (giữ nguyên ID), không tạo bản ghi trùng.</div>` : ''}
+      ${multi ? '' : noPair ? html`<div class="msg warn">${icon('info')} <div>Lồng <b>${cage.code}</b> chưa ghép cặp bố mẹ nên chưa ghi được trứng/lứa. Bạn vẫn có thể ghi <b>ghi chú và ảnh</b>. <button type="button" class="btn soft sm" data-go-pair style="margin-top:6px">${icon('plus')} Ghép cặp ngay</button></div></div>`
         : c.clutch ? html`<div class="msg ok">${icon('egg')} Lứa <b>${c.clutch.code}</b> · bắt đầu ${fmtDate(c.clutch.start_date)}${c.clutch.status === 'closed' ? ' (đã kết thúc)' : ''}</div>`
         : html`<fieldset class="fieldset"><legend>Lứa sinh sản</legend>
           <p class="small muted" style="margin:0">Lồng chưa có lứa đang theo dõi vào ngày này. Nếu đã có trứng, bật "Bắt đầu lứa mới". Nếu chỉ ghi chú, để tất cả số = 0.</p>
           <label class="check"><input type="checkbox" name="new_clutch"> Bắt đầu lứa mới</label>
           ${field('Ngày bắt đầu lứa', html`<input type="date" name="first_egg" value="${state.date}" max="${state.date}">`, 'Mặc định là ngày cập nhật (thường là hôm nay). Lứa bắt đầu từ trước thì chọn ngày cũ hơn. Nhập nhầm: chủ trại sửa lại trong Chi tiết lứa.')}
         </fieldset>`}
-      <fieldset class="fieldset ${noPair ? 'hidden' : ''}"><legend>Số liệu TỔNG của lứa (tính đến ngày này)</legend>
-        <p class="small muted" style="margin:0">Nhập con số tổng hiện tại, không nhập số phát sinh trong ngày. ${ex ? 'Đang hiển thị số đã lưu của ngày này.' : c.prev ? `Đã điền sẵn theo lần ghi ${fmtDate(c.prev.log_date)} — chỉ sửa ô có thay đổi.` : ''}</p>
-        ${(() => { const o = ex || (c.clutch ? logsOfClutch(store.db.daily_logs, c.clutch.id).filter((l) => l.log_date <= state.date).pop() : null);
-          return o && (o.eggs_out || o.chicks_out) ? html`<div class="msg info">${icon('swap')} <div>Lứa đã chuyển sang lồng khác: <b>${o.eggs_out || 0} trứng · ${o.chicks_out || 0} chim non</b> (máy chủ tự trừ khi chuyển). "Chim non hiện tại" chỉ đếm chim của lứa còn trong lồng này — không tính nhóm nhận từ lồng khác.</div></div>` : ''; })()}
-        ${SNAPSHOT_FIELDS.map((f) => (store.groupsEnabled && f === 'chicks'
-          ? stepper(f, 'Chim non CỦA LỨA còn trong lồng', c.values[f], { hint: 'Không tính chim nhận từ lồng khác' })
-          : stepper(f, LABELS[f], c.values[f], { hint: HINTS[f] })))}
-        <div class="delta-preview" data-delta></div>
-      </fieldset>
+      ${multi ? set.map((k, i) => { const kc = ctxFor(state.date, null, k.id); return numbers(kc, kc.existing, `__${i}`, `Số liệu TỔNG của ${clutchTitle(k)}`); })
+        : html`<div class="${noPair ? 'hidden' : ''}">${numbers(c, ex, '', 'Số liệu TỔNG của lứa (tính đến ngày này)')}</div>`}
       <div class="grid2">
         ${field('Bố mẹ', html`<select name="parents_status">${options(PARENT_STATUS, ex?.parents_status || 'bình thường')}</select>`)}
         ${field('Tổ', html`<select name="nest_status">${options(NEST_STATUS, ex?.nest_status || 'bình thường')}</select>`)}
@@ -80,7 +96,7 @@ export function openDailyForm(app, cageId, opts = {}) {
   };
 
   const footer = () => html`
-    ${state.logId || ctxFor(state.date).existing ? (store.can('delete') ? html`<button class="btn ghost" data-del>${icon('trash')}</button>` : '') : ''}
+    ${multiSet().length < 2 && (state.logId || ctxFor(state.date).existing) ? (store.can('delete') ? html`<button class="btn ghost" data-del>${icon('trash')}</button>` : '') : ''}
     <button class="btn ghost" data-close>Huỷ</button>
     <button class="btn primary" data-save>${icon('check')} Lưu nhật ký</button>`;
 
@@ -94,11 +110,14 @@ export function openDailyForm(app, cageId, opts = {}) {
         const form = el.querySelector('[data-daily]');
         picker = mountPhotoPicker(form.querySelector('[data-photo-picker]'), store);
         const updDelta = () => {
-          const c = ctxFor(state.date, state.logId);
+          const set = multiSet();
+          const multi = set.length > 1;
+          const suffix = multi ? `__${state.focus}` : '';
+          const c = ctxFor(state.date, state.logId, multi ? set[state.focus].id : null);
           const v = formValues(form);
-          const s = {}; SNAPSHOT_FIELDS.forEach((f) => { s[f] = toInt(v[f], -1); });
+          const s = {}; SNAPSHOT_FIELDS.forEach((f) => { s[f] = toInt(v[`${f}${suffix}`], -1); });
           const errs = validateSnapshot(s);
-          const dEl = form.querySelector('[data-delta]');
+          const dEl = form.querySelector(`[data-numbers="${suffix}"] [data-delta]`);
           if (errs.length) { dEl.innerHTML = `<b style="color:var(--red)">${errs[0]}</b>`; return; }
           if (!c.clutch && s.eggs > 0) { const nc = form.querySelector('[name=new_clutch]'); if (nc && !nc.checked) nc.checked = true; }
           const d = describeDelta(snapshotDelta(c.prev, s));
@@ -108,7 +127,7 @@ export function openDailyForm(app, cageId, opts = {}) {
         form.querySelector('[name=log_date]').addEventListener('change', (e) => {
           if (!isISODate(e.target.value)) return;
           picker?.dispose();
-          state = { date: e.target.value, logId: null };
+          state = { date: e.target.value, logId: null, focus: 0 };
           el.querySelector('.sheet-body').innerHTML = String(body());
           el.querySelector('.sheet-foot').innerHTML = String(footer());
           wire();
@@ -118,6 +137,14 @@ export function openDailyForm(app, cageId, opts = {}) {
       wire();
       bindNoteActions(el, app);
       el.addEventListener('click', async (e) => {
+        const fc = e.target.closest('[data-focus]');
+        if (fc) {
+          state.focus = Number(fc.dataset.focus);
+          el.querySelectorAll('[data-focus]').forEach((x) => x.classList.toggle('active', x === fc));
+          el.querySelectorAll('[data-numbers]').forEach((x) => x.classList.toggle('hidden', x.dataset.numbers !== `__${state.focus}`));
+          el.querySelector('[data-daily]').dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
         if (e.target.closest('[data-go-pair]')) { close(); openPairSheet(app, cageId); return; }
         if (e.target.closest('[data-del]')) {
           const c = ctxFor(state.date, state.logId);
@@ -135,15 +162,37 @@ export function openDailyForm(app, cageId, opts = {}) {
           const pErr = await photosReady(picker, btn);
           if (pErr.length) { showMessages(msg, pErr); return; }
           const v = formValues(form);
-          const c = ctxFor(state.date, state.logId);
-          const snapshot = {}; SNAPSHOT_FIELDS.forEach((f) => { snapshot[f] = toInt(v[f], -1); });
-          const input = {
-            id: c.existing?.id, cage_id: cageId, log_date: v.log_date, snapshot,
-            parents_status: v.parents_status, nest_status: v.nest_status, note: v.note, photo_ids: picker.ids(),
-            newClutch: v.new_clutch ? { start_date: v.first_egg } : null,
-            expectedVersion: openedVersion,
-          };
-          const plan = planDailySave(store.db, input, store.ctx());
+          const set = multiSet();
+          let plan;
+          if (set.length > 1) {
+            plan = { errors: [], warnings: [], ops: [], isEdit: false };
+            set.forEach((k, i) => {
+              const kc = ctxFor(state.date, null, k.id);
+              const snapshot = {}; SNAPSHOT_FIELDS.forEach((f) => { snapshot[f] = toInt(v[`${f}__${i}`], -1); });
+              const focused = i === state.focus;
+              // Lứa không đổi số và chưa có dòng hôm nay thì không ghi thêm; lứa đang xem luôn được ghi (kèm ghi chú, ảnh)
+              if (!focused && !kc.existing && SNAPSHOT_FIELDS.every((f) => snapshot[f] === kc.values[f])) return;
+              const one = planDailySave(store.db, {
+                id: kc.existing?.id, cage_id: cageId, clutch_id: k.id, log_date: v.log_date, snapshot,
+                parents_status: v.parents_status, nest_status: v.nest_status, note: focused ? v.note : '', photo_ids: focused ? picker.ids() : (kc.existing?.photo_ids || []),
+                expectedVersion: versions[k.id] ?? null,
+              }, store.ctx());
+              plan.errors.push(...one.errors.map((x) => `${clutchTitle(k)}: ${x}`));
+              plan.warnings.push(...one.warnings.map((x) => `${clutchTitle(k)}: ${x}`));
+              plan.ops.push(...one.ops);
+              plan.isEdit = plan.isEdit || !!one.isEdit;
+            });
+            if (plan.errors.length) plan.ops = [];
+          } else {
+            const c = ctxFor(state.date, state.logId);
+            const snapshot = {}; SNAPSHOT_FIELDS.forEach((f) => { snapshot[f] = toInt(v[f], -1); });
+            plan = planDailySave(store.db, {
+              id: c.existing?.id, cage_id: cageId, log_date: v.log_date, snapshot,
+              parents_status: v.parents_status, nest_status: v.nest_status, note: v.note, photo_ids: picker.ids(),
+              newClutch: v.new_clutch ? { start_date: v.first_egg } : null,
+              expectedVersion: openedVersion,
+            }, store.ctx());
+          }
           if (plan.errors.length) { showMessages(msg, plan.errors, plan.warnings); return; }
           if (plan.warnings.length && !ackWarnings) {
             ackWarnings = true;
@@ -166,24 +215,30 @@ export function openCloseClutch(app, clutchId) {
   const store = app.store;
   const c = store.byId('clutches', clutchId);
   const sm = clutchSummary(c, store.db.daily_logs);
+  const others = openClutches(store.db.clutches, c.cage_id).some((x) => x.id !== clutchId);
   openSheet({
-    title: `Kết thúc lứa ${c.code}`, subtitle: `Bắt đầu ${fmtDate(c.start_date)}`,
-    body: html`<form class="form" data-f>
+    title: `Kết thúc ${clutchTitle(c)}`, subtitle: `${c.code} · bắt đầu ${fmtDate(c.start_date)}`,
+    body: html`<form class="form" data-f novalidate>
       <div class="msg info">${icon('egg')} Trứng ${sm.eggs} · có cồ ${sm.fertile} · nở ${sm.hatched} · non hiện tại ${sm.chicks} · ra ràng ${sm.fledged}</div>
-      ${sm.chicks > 0 ? html`<div class="msg warn">${icon('alert')} Lứa vẫn còn ${sm.chicks} chim non trong lồng. Nếu đã tách, hãy cập nhật nhật ký (chim non = 0, ra ràng = số đã tách) trước.</div>` : ''}
+      ${sm.chicks > 0 ? html`<div class="msg warn">${icon('alert')} <div>Lứa vẫn còn <b>${sm.chicks} chim non</b>. Hệ thống không tự chuyển hay xoá. Hãy chuyển ra lồng phóng, chuyển tổ, ghi hao hụt hoặc sửa nhật ký trước, rồi kết thúc lứa.</div></div>` : ''}
+      ${sm.pending > 0 ? html`<fieldset class="fieldset"><legend>Lứa còn ${sm.pending} trứng chưa xử lý</legend>
+        <p class="small muted" style="margin:0">Xác nhận đúng tình trạng của ${sm.pending} trứng này. Trứng chưa soi không tự được coi là không cồ. Nếu trứng còn đang ấp thì chưa nên kết thúc lứa.</p>
+        ${stepper('res_damaged', 'Hỏng / vỡ / không nở', 0)}${stepper('res_infertile', 'Đã soi: không cồ', 0)}</fieldset>` : ''}
       ${field('Ngày kết thúc', html`<input type="date" name="end_date" value="${store.today()}" max="${store.today()}">`, 'Với "tách hết chim non": đây là ngày tách con cuối cùng.')}
       ${field('Lý do', html`<select name="end_reason">${options({ weaned: 'Đã tách hết chim non', failed: 'Lứa hỏng / không nở', other: 'Khác' }, 'weaned')}</select>`)}
-      <label class="check"><input type="checkbox" name="start_rest" checked> Bắt đầu tính nghỉ đẻ từ ngày kết thúc</label>
-      ${field('Đánh giá lại sau (ngày)', html`<input type="number" name="review_days" value="${store.settings.restReviewDays}" min="1" inputmode="numeric">`)}
-      ${field('Ghi chú', html`<textarea name="note" rows="2"></textarea>`)}
+      ${others ? html`<p class="small muted">Lồng còn lứa khác đang mở nên chưa tính nghỉ đẻ.</p>` : html`<label class="check"><input type="checkbox" name="start_rest" checked> Bắt đầu tính nghỉ đẻ từ ngày kết thúc</label>
+      ${field('Đánh giá lại sau (ngày)', html`<input type="number" name="review_days" value="${store.settings.restReviewDays}" min="1" inputmode="numeric">`)}`}
+      ${field('Ghi chú, nguyên nhân hao hụt (tuỳ chọn)', html`<textarea name="note" rows="2"></textarea>`)}
       <div class="form-msg" data-msg></div></form>`,
     footer: html`<button class="btn ghost" data-close>Huỷ</button><button class="btn primary" data-save>${icon('check')} Kết thúc lứa</button>`,
     onMount: (el, close) => el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => {
       const v = formValues(el.querySelector('[data-f]'));
-      const r = await store.run(planCloseClutch(store.db, clutchId, v, store.ctx()), { requires: 'breeding.write' });
+      const plan = planFinishClutch(store.db, clutchId, { ...v, resolve: { damaged: toInt(v.res_damaged, 0), infertile: toInt(v.res_infertile, 0) } }, store.ctx());
+      const r = await store.run(plan, { requires: 'breeding.write' });
       if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);
-      toast(`Đã kết thúc lứa ${c.code}${v.start_rest ? ' và bắt đầu tính nghỉ đẻ' : ''}`);
+      toast(`Đã kết thúc ${clutchTitle(c)}${v.start_rest ? ' và bắt đầu tính nghỉ đẻ' : ''}`);
       close();
+      openClutchReport(app, clutchId);
     })),
   });
 }

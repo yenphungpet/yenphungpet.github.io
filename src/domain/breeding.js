@@ -219,14 +219,121 @@ export function currentPair(pairs, cageId) {
   return pairs.find((p) => p.cage_id === cageId && !p.end_date && !p.deleted) || null;
 }
 
-export function openClutch(clutches, cageId) {
-  return clutches.find((c) => c.cage_id === cageId && c.status !== 'closed' && !c.deleted) || null;
+const byClutchStart = (a, b) => String(a.start_date || '').localeCompare(String(b.start_date || '')) || String(a.created_at || '').localeCompare(String(b.created_at || ''));
+
+/** Các lứa đang mở của lồng, cũ → mới. Từ 0015 một lồng có thể có 2 lứa chồng nhau. */
+export function openClutches(clutches, cageId) {
+  return clutches.filter((c) => c.cage_id === cageId && c.status !== 'closed' && !c.deleted).sort(byClutchStart);
 }
 
-/** Lứa của lồng bao trùm ngày `date` (start_date ≤ date ≤ end_date hoặc lứa đang mở). */
+/** Lứa đang mở mới nhất của lồng. */
+export function openClutch(clutches, cageId) {
+  const list = openClutches(clutches, cageId);
+  return list[list.length - 1] || null;
+}
+
+/** Lứa mới nhất của lồng bao trùm ngày `date` (start_date ≤ date ≤ end_date hoặc lứa đang mở). */
 export function clutchForDate(clutches, cageId, date) {
-  return clutches.find((c) => c.cage_id === cageId && !c.deleted && c.start_date && c.start_date <= date
-    && (c.status !== 'closed' || !c.end_date || date <= c.end_date)) || null;
+  const list = clutches.filter((c) => c.cage_id === cageId && !c.deleted && c.start_date && c.start_date <= date
+    && (c.status !== 'closed' || !c.end_date || date <= c.end_date)).sort(byClutchStart);
+  return list[list.length - 1] || null;
+}
+
+// ---------- Số thứ tự lứa theo CẶP (0015) ----------
+// Cặp = cùng trống + cùng mái, kể cả khi đổi lồng. Đổi một con là cặp mới, đếm lại. Thiếu một con thì chỉ tính theo đúng dòng cặp đó.
+export const pairKey = (p) => (!p ? null : p.male_id && p.female_id ? `${p.male_id}|${p.female_id}` : `pair:${p.id}`);
+
+/** Mọi lứa của cặp này ở mọi lồng, cũ → mới. */
+export function pairClutches(db, pair) {
+  const key = pairKey(pair);
+  if (!key) return [];
+  const ids = new Set(db.pairs.filter((p) => pairKey(p) === key).map((p) => p.id));
+  return db.clutches.filter((c) => !c.deleted && ids.has(c.pair_id)).sort(byClutchStart);
+}
+
+// Ngày chuyển V1 → V2. Cặp tạo sau mốc này có toàn bộ lịch sử trong hệ thống; cặp từ V1 có thể đã đẻ trước đó.
+const V1_CUTOVER = '2026-10-21';
+
+/**
+ * Gợi ý số lứa tiếp theo. seq = null nghĩa là chưa đủ căn cứ, không tự khẳng định là lứa 1:
+ * cặp có lứa chưa xác định số, hoặc cặp từ V1 chưa có lứa nào trong hệ thống.
+ */
+export function nextClutchSeq(db, pair) {
+  const list = pairClutches(db, pair);
+  const unknown = list.filter((c) => !c.pair_seq).length;
+  if (unknown) return { seq: null, unknown, known: list.length - unknown, reason: `Cặp này có ${unknown} lứa chưa xác định số thứ tự, nên chưa suy ra được số tiếp theo.` };
+  if (list.length) return { seq: Math.max(...list.map((c) => c.pair_seq)) + 1, unknown: 0, known: list.length, reason: '' };
+  if (String(pair?.created_at || '').slice(0, 10) > V1_CUTOVER) return { seq: 1, unknown: 0, known: 0, reason: '' };
+  return { seq: null, unknown: 0, known: 0, reason: 'Cặp chưa có lứa nào trong hệ thống, nhưng có thể đã đẻ từ trước. Nếu đây đúng là lứa đầu, nhập số 1.' };
+}
+
+/** Tên lứa cho người dùng. Chưa xác định số thì dùng mã lứa, không gọi là Lứa 1. */
+export const clutchTitle = (c) => (!c ? '' : c.pair_seq ? `Lứa ${c.pair_seq}` : `Lứa ${c.code}`);
+
+/**
+ * "+ Thêm lứa sinh sản": tạo lứa tiếp theo cho cặp đang ở lồng. Không đụng tới lứa đang mở.
+ * input: { pair_seq, unknown, start_date, first_egg_date, note, eggs }
+ */
+export function planAddClutch(db, cageId, input, ctx) {
+  const { today, actor, now } = ctx;
+  const errors = [];
+  const cage = db.cages.find((c) => c.id === cageId);
+  const pair = currentPair(db.pairs, cageId);
+  if (!cage) return { errors: ['Không tìm thấy lồng'], ops: [] };
+  if (!pair) return { errors: ['Lồng chưa ghép cặp bố mẹ'], ops: [] };
+  if (!isISODate(input.start_date)) errors.push('Ngày bắt đầu ghi nhận không hợp lệ');
+  else if (input.start_date > today) errors.push('Ngày bắt đầu ghi nhận không được ở tương lai');
+  const first = input.first_egg_date || null;
+  if (first && !isISODate(first)) errors.push('Ngày đẻ trứng đầu tiên không hợp lệ');
+  else if (first && first > today) errors.push('Ngày đẻ trứng đầu tiên không được ở tương lai');
+  let seq = null;
+  if (!input.unknown) {
+    seq = Number(input.pair_seq);
+    if (!Number.isInteger(seq) || seq < 1) errors.push('Nhập số thứ tự lứa, hoặc đánh dấu "Chưa xác định"');
+    else {
+      const dup = pairClutches(db, pair).find((c) => c.pair_seq === seq);
+      if (dup) errors.push(`Cặp này đã có Lứa ${seq} (${dup.code}). Nhập số khác.`);
+    }
+  }
+  const eggs = Number(input.eggs || 0);
+  if (!Number.isInteger(eggs) || eggs < 0) errors.push('Số trứng phải là số nguyên từ 0 trở lên');
+  const restAt = first || input.start_date;
+  const restOpen = db.rest_periods.find((p) => p.cage_id === cageId && !p.end_date && !p.deleted);
+  if (restOpen?.start_date && restAt < restOpen.start_date) errors.push('Ngày của lứa mới sớm hơn ngày bắt đầu nghỉ đẻ. Kiểm tra lại.');
+  if (errors.length) return { errors, ops: [] };
+  const n = db.clutches.filter((c) => c.cage_id === cageId).length + 1;
+  const clutch = {
+    id: uid(), cage_id: cageId, pair_id: pair.id, code: `${cage.code}-L${String(n).padStart(2, '0')}`, pair_seq: seq,
+    start_date: input.start_date, first_egg_date: first, end_date: null, status: 'open', end_reason: null, created_at: now, created_by: actor,
+  };
+  const ops = [{ table: 'clutches', op: 'put', record: clutch }];
+  if (restOpen) ops.push({ table: 'rest_periods', op: 'put', before: restOpen, record: { ...restOpen, end_date: restAt, end_reason: first ? 'first_egg' : 'new_clutch', updated_at: now, updated_by: actor } });
+  if (eggs > 0) {
+    const last = logsOfCage(db.daily_logs, cageId).pop();
+    const log = planDailySave({ ...db, clutches: [...db.clutches, clutch] }, {
+      cage_id: cageId, clutch_id: clutch.id, log_date: today < input.start_date ? input.start_date : today, snapshot: { ...emptySnapshot(), eggs },
+      parents_status: last?.parents_status, nest_status: last?.nest_status, note: input.note, photo_ids: [], expectedVersion: null,
+    }, ctx);
+    if (log.errors.length) return { errors: log.errors, ops: [] };
+    ops.push(...log.ops);
+  } else {
+    const note = planNewNote(db, { cage_id: cageId, clutch_id: clutch.id, note_date: today, text: input.note }, ctx);
+    if (note.errors.length) return { errors: note.errors, ops: [] };
+    ops.push(...note.ops);
+  }
+  return { errors: [], ops, record: clutch };
+}
+
+/** Chủ trại xác nhận hoặc bỏ số thứ tự của một lứa đã có. Có audit ở máy chủ. */
+export function planSetClutchSeq(db, clutchId, input, ctx) {
+  const clutch = db.clutches.find((c) => c.id === clutchId && !c.deleted);
+  if (!clutch) return { errors: ['Không tìm thấy lứa'], ops: [] };
+  const seq = input.unknown ? null : Number(input.pair_seq);
+  if (!input.unknown && (!Number.isInteger(seq) || seq < 1)) return { errors: ['Nhập số thứ tự lứa, hoặc đánh dấu "Chưa xác định"'], ops: [] };
+  const pair = db.pairs.find((p) => p.id === clutch.pair_id);
+  const dup = seq && pairClutches(db, pair).find((c) => c.pair_seq === seq && c.id !== clutchId);
+  if (dup) return { errors: [`Cặp này đã có Lứa ${seq} (${dup.code}). Nhập số khác.`], ops: [] };
+  return { errors: [], ops: [{ table: 'clutches', op: 'put', before: clutch, record: { ...clutch, pair_seq: seq, updated_at: ctx.now, updated_by: ctx.actor } }] };
 }
 
 /** Ghi chú cũ mới nhất nằm trong nhật ký (trước 0011). Màn hình dùng latestCageNote (domain/notes.js). */
@@ -329,9 +436,10 @@ export function cageCheckInfo(db, cageId, today, logs = logsOfCage(db.daily_logs
 
 export function cageState(cage, db, today, settings = DEFAULT_SETTINGS) {
   const pair = currentPair(db.pairs, cage.id);
-  const clutch = openClutch(db.clutches, cage.id);
-  const openCount = db.clutches.filter((c) => c.cage_id === cage.id && c.status !== 'closed' && !c.deleted).length;
-  const summary = clutch ? clutchSummary(clutch, db.daily_logs) : null;
+  const clutches = openClutches(db.clutches, cage.id);
+  const clutch = clutches[clutches.length - 1] || null;
+  const summaries = clutches.map((c) => ({ clutch: c, summary: clutchSummary(c, db.daily_logs) }));
+  const summary = summaries.length ? summaries[summaries.length - 1].summary : null;
   const logs = logsOfCage(db.daily_logs, cage.id).filter((l) => !l.auto_brood);
   const lastLog = logs[logs.length - 1] || null;
   const check = cageCheckInfo(db, cage.id, today, logs);
@@ -343,13 +451,12 @@ export function cageState(cage, db, today, settings = DEFAULT_SETTINGS) {
   const openHealth = (db.health_cases || []).filter((h) => h.cage_id === cage.id && h.status !== 'closed' && !h.deleted);
   let status;
   if (!pair) status = 'no_pair';
-  else if (clutch) status = summary.stage;
+  else if (clutch) status = ['rearing', 'incubating', 'laying', 'awaiting_close'].find((k) => summaries.some((x) => x.summary.stage === k));
   else if (rest.state === 'resting') status = 'resting';
   else status = 'idle';
-  const checks = clutchChecks(clutch, summary, db, today, settings);
-  if (openCount > 1) checks.unshift({ level: 'danger', short: `${openCount} lứa đang mở`, text: `Lồng ${cage.code} có ${openCount} lứa cùng mở — chỉ lứa ${clutch.code} được hiển thị; kết thúc lứa thừa` });
+  const checks = summaries.flatMap((x) => clutchChecks(x.clutch, x.summary, db, today, settings));
   return {
-    cage, pair, clutch, summary, lastLog, daysSinceUpdate, rest, loggedToday, stale, longRest, check, checkedToday: check.checkedToday,
+    cage, pair, clutch, clutches, summary, summaries, lastLog, daysSinceUpdate, rest, loggedToday, stale, longRest, check, checkedToday: check.checkedToday,
     note: latestCageNote(db, cage.id),
     openNotes: notesOfCage(db, cage.id).filter(isOpenAction),
     warnings: logWarnings(lastLog),
@@ -372,8 +479,8 @@ export const CAGE_STATUS_LABELS = {
 
 /**
  * Lưu "Cập nhật hôm nay" / sửa nhật ký.
- * input: { id?, cage_id, log_date, snapshot, parents_status, nest_status, note, noteAction, photo_ids,
- *          newClutch?: { start_date } }  — newClutch chỉ dùng khi lồng chưa có lứa mở.
+ * input: { id?, cage_id, clutch_id?, log_date, snapshot, parents_status, nest_status, note, noteAction, photo_ids,
+ *          newClutch?: { start_date } }  — newClutch chỉ dùng khi lồng chưa có lứa mở. clutch_id: lứa cần ghi khi lồng có 2 lứa chồng nhau; bỏ trống là lứa mới nhất.
  * note = ghi chú MỚI (tuỳ chọn): luôn tạo 1 dòng cage_notes mới, không sửa ghi chú cũ; noteAction = đánh dấu "Cần xử lý".
  */
 export function planDailySave(db, input, ctx) {
@@ -390,11 +497,12 @@ export function planDailySave(db, input, ctx) {
   for (const f of SNAPSHOT_FIELDS) s[f] = Number(input.snapshot?.[f] ?? 0);
   errors.push(...validateSnapshot(s));
 
-  // Bản ghi đang sửa: theo id; nếu không có id nhưng cùng lồng + cùng ngày đã có => sửa bản ghi đó (không tạo trùng)
+  // Bản ghi đang sửa: theo id; nếu không có id nhưng cùng lồng + cùng lứa + cùng ngày đã có => sửa bản ghi đó (không tạo trùng)
   let existing = input.id ? db.daily_logs.find((l) => l.id === input.id && !l.deleted) : null;
   if (input.id && !existing) errors.push('Bản ghi cần sửa không còn tồn tại');
   if (!existing && isISODate(input.log_date)) {
-    existing = db.daily_logs.find((l) => l.cage_id === cage.id && l.log_date === input.log_date && !l.deleted) || null;
+    const target = input.clutch_id || clutchForDate(db.clutches, cage.id, input.log_date)?.id || null;
+    existing = logOfDay(db.daily_logs, cage.id, input.log_date, target);
   }
   // Chống ghi đè: phiên bản lúc MỞ biểu mẫu phải còn khớp với dữ liệu hiện tại
   if (existing && input.expectedVersion !== undefined && input.expectedVersion !== null && (existing.version || 0) !== input.expectedVersion) {
@@ -408,12 +516,12 @@ export function planDailySave(db, input, ctx) {
     return { errors: ['Vừa có thao tác chuyển trứng / chim non của lồng này cho ngày đang ghi (thiết bị / người khác). Số liệu đã thay đổi — hãy đóng và mở lại biểu mẫu (thay đổi của bạn chưa được lưu).'], warnings, ops: [], conflict: true };
   }
   if (existing && input.log_date !== existing.log_date) {
-    const clash = db.daily_logs.find((l) => l.cage_id === cage.id && l.log_date === input.log_date && l.id !== existing.id && !l.deleted);
+    const clash = db.daily_logs.find((l) => l.cage_id === cage.id && l.log_date === input.log_date && l.id !== existing.id && !l.deleted && (l.clutch_id || null) === (existing.clutch_id || null));
     if (clash) errors.push('Ngày này đã có nhật ký khác. Hãy sửa bản ghi của ngày đó.');
   }
 
   // Xác định lứa: giữ lứa của bản ghi đang sửa; nếu chưa có thì lấy lứa bao trùm ngày ghi
-  let clutchId = existing ? existing.clutch_id : null;
+  let clutchId = existing ? existing.clutch_id : (input.clutch_id || null);
   if (!clutchId && isISODate(input.log_date)) {
     const c = clutchForDate(db.clutches, cage.id, input.log_date);
     clutchId = c ? c.id : null;
@@ -431,7 +539,7 @@ export function planDailySave(db, input, ctx) {
       const pair = currentPair(db.pairs, cage.id);
       const seq = db.clutches.filter((c) => c.cage_id === cage.id).length + 1;
       const clutch = {
-        id: uid(), cage_id: cage.id, pair_id: pair ? pair.id : null,
+        id: uid(), cage_id: cage.id, pair_id: pair ? pair.id : null, pair_seq: pair ? nextClutchSeq(db, pair).seq : null,
         code: `${cage.code}-L${String(seq).padStart(2, '0')}`,
         start_date: input.newClutch.start_date, end_date: null, status: 'open', end_reason: null,
         created_at: now, created_by: actor,
@@ -469,7 +577,13 @@ export function planDailySave(db, input, ctx) {
     }
   }
 
-  if (errors.length) return { errors, warnings, ops: [] };
+  if (errors.length) {
+    // Nhập số của đợt đẻ mới vào ô TỔNG của lứa cũ là nhầm thường gặp nhất: chỉ rõ lối đi đúng
+    if (clutchId && !hasOtherClutch(db, cage.id, clutchId) && s.eggs < (Number(pickSnapshot(logsOfClutch(db.daily_logs, clutchId).pop()).eggs) || 0)) {
+      errors.push('Nếu đây là đợt đẻ mới: giữ nguyên số của lứa này, vào Mở rộng → "+ Thêm lứa sinh sản" rồi ghi trứng cho lứa mới.');
+    }
+    return { errors, warnings, ops: [] };
+  }
 
   const base = existing ? { ...existing } : { id: uid(), created_at: now, created_by: actor, version: 0 };
   const record = {
@@ -494,7 +608,20 @@ export function planDailySave(db, input, ctx) {
   return { errors, warnings, ops, record, note: note.record || null, isEdit: !!existing };
 }
 
-/** Kết thúc lứa; tuỳ chọn bắt đầu tính nghỉ đẻ từ ngày tách hết chim non. */
+const hasOtherClutch = (db, cageId, clutchId) => openClutches(db.clutches, cageId).some((c) => c.id !== clutchId);
+
+/** Dòng nhật ký của lồng trong ngày. Có lứa: dòng của lứa đó, hoặc dòng chưa gắn lứa. Không có lứa: bất kỳ dòng nào của ngày. */
+export function logOfDay(logs, cageId, date, clutchId) {
+  const day = logs.filter((l) => l.cage_id === cageId && l.log_date === date && !l.deleted);
+  if (!clutchId) return day[0] || null;
+  return day.find((l) => l.clutch_id === clutchId) || day.find((l) => !l.clutch_id) || null;
+}
+
+/**
+ * Kết thúc lứa; tuỳ chọn bắt đầu tính nghỉ đẻ từ ngày tách hết chim non.
+ * Không kết thúc khi còn chim non hoặc trứng chưa xử lý. Không tự xoá hay chuyển số còn lại, không tự coi trứng chưa soi là không cồ.
+ * input.resolve: { infertile, damaged } = người dùng xác nhận tình trạng số trứng còn lại, phải đủ đúng số trứng còn lại.
+ */
 export function planCloseClutch(db, clutchId, input, ctx) {
   const { today, actor, now, settings = DEFAULT_SETTINGS } = ctx;
   const errors = [];
@@ -508,16 +635,33 @@ export function planCloseClutch(db, clutchId, input, ctx) {
     if (clutch.start_date && input.end_date < clutch.start_date) errors.push('Ngày kết thúc sớm hơn ngày bắt đầu lứa');
   }
   const s = clutchSummary(clutch, db.daily_logs);
-  if (input.end_reason === 'weaned' && s.chicks > 0) {
+  if (s.chicks > 0) {
     errors.push(`Lứa vẫn còn ${s.chicks} chim non trong lồng. Hãy cập nhật nhật ký (chim non = 0) hoặc chuyển chim sang lồng phóng trước.`);
   }
-  if (input.start_rest) {
+  const res = { infertile: Number(input.resolve?.infertile) || 0, damaged: Number(input.resolve?.damaged) || 0 };
+  if (s.pending > 0 && res.infertile + res.damaged !== s.pending) {
+    errors.push(`Lứa còn ${s.pending} trứng chưa xử lý. Hãy xác nhận đủ ${s.pending} trứng là không cồ hoặc hỏng / không nở, hoặc xử lý trứng trước khi kết thúc.`);
+  }
+  // Lồng còn lứa khác đang mở thì chưa phải nghỉ đẻ
+  const startRest = !!input.start_rest && !hasOtherClutch(db, clutch.cage_id, clutchId);
+  if (startRest) {
     const restOpen = db.rest_periods.find((p) => p.cage_id === clutch.cage_id && !p.end_date && !p.deleted);
     if (restOpen) errors.push('Lồng đang có kỳ nghỉ đẻ chưa kết thúc');
   }
   if (errors.length) return { errors, ops: [] };
+  if (s.pending > 0) {
+    const last = s.latestLog;
+    const log = planDailySave(db, {
+      cage_id: clutch.cage_id, clutch_id: clutchId, log_date: input.end_date < last.log_date ? last.log_date : input.end_date,
+      id: last.log_date >= input.end_date ? last.id : undefined,
+      snapshot: { ...pickSnapshot(last), infertile: s.infertile + res.infertile, damaged: s.damaged + res.damaged },
+      parents_status: last.parents_status, nest_status: last.nest_status, photo_ids: last.log_date >= input.end_date ? last.photo_ids : [],
+    }, ctx);
+    if (log.errors.length) return { errors: log.errors, ops: [] };
+    ops.push(...log.ops);
+  }
   ops.push({ table: 'clutches', op: 'put', before: clutch, record: { ...clutch, status: 'closed', end_date: input.end_date, end_reason: input.end_reason || 'other', close_note: input.note || '', updated_at: now, updated_by: actor } });
-  if (input.start_rest) {
+  if (startRest) {
     ops.push({ table: 'rest_periods', op: 'put', record: {
       id: uid(), cage_id: clutch.cage_id, pair_id: clutch.pair_id, start_date: input.end_date,
       reason: input.end_reason === 'weaned' ? 'Tách hết chim non' : (input.rest_reason || 'Kết thúc lứa'),
@@ -555,11 +699,6 @@ export function planEditClutchStart(db, clutchId, input, ctx) {
     const logs = logsOfClutch(db.daily_logs, clutch.id);
     if (logs.length && d > logs[0].log_date) {
       errors.push(`Lứa đã có nhật ký từ ngày ${logs[0].log_date} — ngày bắt đầu (quả trứng đầu tiên) phải từ ngày đó trở về trước. Nhật ký không bị đổi ngày.`);
-    }
-    const end = clutch.end_date || '9999-12-31';
-    for (const o of db.clutches) {
-      if (o.id === clutch.id || o.deleted || o.cage_id !== clutch.cage_id || !o.start_date) continue;
-      if (d <= (o.end_date || '9999-12-31') && o.start_date <= end) errors.push(`Trùng thời gian với lứa ${o.code} (${o.start_date} → ${o.end_date || 'đang mở'}) của cùng lồng`);
     }
     // Nhật ký "không thuộc lứa" nằm trong khoảng mới: giữ nguyên, không tự gán (chỉ báo)
     const lo = d < clutch.start_date ? d : null;
@@ -711,8 +850,11 @@ export function inFarmStats(db, clutch) {
 /** Hiệu suất của 1 cặp (hoặc lồng) trong khoảng thời gian (theo ngày bắt đầu lứa). Toàn trại: bỏ lồng đã lưu trữ. */
 export function pairPerformance(db, { pairId = null, cageId = null, from = null, to = null } = {}) {
   const farmWide = !pairId && !cageId;
+  // Cùng trống + mái ở nhiều lồng là một cặp
+  const pair = pairId ? db.pairs.find((p) => p.id === pairId) : null;
+  const pairIds = pair ? new Set(db.pairs.filter((p) => pairKey(p) === pairKey(pair)).map((p) => p.id)) : new Set([pairId]);
   const clutches = db.clutches.filter((c) => !c.deleted && (!farmWide || inFarmStats(db, c))
-    && (!pairId || c.pair_id === pairId) && (!cageId || c.cage_id === cageId)
+    && (!pairId || pairIds.has(c.pair_id)) && (!cageId || c.cage_id === cageId)
     && (!from || (c.start_date && c.start_date >= from)) && (!to || (c.start_date && c.start_date <= to)));
   const sums = { clutches: clutches.length, closed: 0, eggs: 0, fertile: 0, infertile: 0, damaged: 0, hatched: 0, fledged: 0,
     resolvedFertile: 0, resolvedHatched: 0, closedHatched: 0, closedFledged: 0 };
@@ -725,7 +867,7 @@ export function pairPerformance(db, { pairId = null, cageId = null, from = null,
   }
   const restDays = (cageId || pairId)
     ? db.rest_periods.filter((p) => !p.deleted && p.end_date && isISODate(p.start_date)
-        && (!pairId || p.pair_id === pairId) && (!cageId || p.cage_id === cageId)
+        && (!pairId || pairIds.has(p.pair_id)) && (!cageId || p.cage_id === cageId)
         && (!from || p.end_date >= from) && (!to || p.start_date <= to))
       .map((p) => daysBetween(p.start_date, p.end_date))
     : [];

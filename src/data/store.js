@@ -6,8 +6,8 @@ import { DEFAULT_SETTINGS } from '../domain/breeding.js';
 import { todayVN } from '../core/dates.js';
 import { uid } from '../core/ids.js';
 
-const BROOD_SET = ['brood_groups', 'brood_events', 'daily_logs', 'stock_movements', 'cage_checks', 'brood_refs'];
-const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, cage_checks: BROOD_SET, brood_refs: BROOD_SET, daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'] };
+const BROOD_SET = ['brood_groups', 'brood_events', 'daily_logs', 'stock_movements', 'cage_checks', 'brood_refs', 'clutches'];
+const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, cage_checks: BROOD_SET, brood_refs: BROOD_SET, clutches: [...BROOD_SET, 'rest_periods'], daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'], stock_movements: BROOD_SET, birds: ['birds', 'pairs'], pairs: ['birds', 'pairs'] };
 
 const hhmm = (t) => new Date(t).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
@@ -112,7 +112,7 @@ export class Store {
   }
 
   /** So thời điểm sửa mới nhất trên máy chủ với dữ liệu đang có; bảng nào mới hơn ⇒ tải lại bảng đó. Trả về danh sách bảng đã lỡ. */
-  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_checks', 'cage_notes', 'clutches']) {
+  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_checks', 'cage_notes', 'clutches', 'stock_movements', 'flight_pens', 'birds', 'pairs', 'cages', 'rest_periods']) {
     if (!this.adapter.latestStamps) return [];
     const have = tables.filter((t) => Array.isArray(this.db[t]));
     const server = await this.adapter.latestStamps(have);
@@ -269,6 +269,8 @@ export class Store {
     }
     this.setStatus('ok', this.adapter.kind === 'demo' ? 'Đã lưu (demo, trên máy này)' : 'Đã lưu');
     this.emit();
+    // Máy chủ có thể đổi thêm số liệu khi ghi (trigger): đọc lại từ máy chủ, không phụ thuộc Realtime
+    for (const o of ops) this._schedule?.(o.table);
     return { ok: true, errors: [], warnings: plan.warnings || [], record: plan.record };
   }
 

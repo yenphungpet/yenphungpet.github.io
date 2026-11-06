@@ -6,7 +6,7 @@ import { icon } from '../ui/icons.js';
 import { openSheet, sheetOpen, field, stepper, options, showMessages, formValues, busy, toast, badge, empty } from '../ui/components.js';
 import { cageArt } from '../ui/brand.js';
 import { fmtDate, fmtDateShort, fmtDateTime, relativeDays, addDays, daysBetween } from '../core/dates.js';
-import { CAGE_STATUS_LABELS, openClutch } from '../domain/breeding.js';
+import { CAGE_STATUS_LABELS, clutchTitle } from '../domain/breeding.js';
 import { cageBrood, cageEvents, chickLimit, KIND_LABELS, LOSS_REASONS, newRequestId, originText, BACKDATE_DAYS } from '../domain/brood.js';
 import {
   fosterState, eggBreakdown, progressBars, lossSummary, clutchQuality, needsCheck, smartSort, checkCounter, planQuickAdd,
@@ -14,6 +14,8 @@ import {
 } from '../domain/smart-cards.js';
 import { openDailyForm, openNoPairNotice } from './breeding-forms.js';
 import { eventRow, openTransferForm, openCreateGroup, openGroupAction, openGroupDetail, openReverse, openBroodSheet } from './brood-ui.js';
+import { openAddClutch, openClutchReport } from './clutch-ui.js';
+import { openCloseClutch } from './breeding-forms.js';
 import { noteBlock, bindNoteActions } from './notes-ui.js';
 import { pairLabel } from './cages.js';
 
@@ -53,9 +55,10 @@ export function smartCard(store, row) {
   const db = store.db; const today = store.today();
   const id = s.cage.id;
   const open = expanded.has(id);
-  const foster = fosterState(db, id, b.clutch);
+  const openList = b.parts.map((p) => p.clutch);
+  const foster = fosterState(db, id, openList);
   const eggs = eggBreakdown(db, id, b);
-  const loss = lossSummary(db, id, b.clutch);
+  const loss = lossSummary(db, id, openList);
   const need = needsCheck(s, b);
   const canW = store.can('breeding.write');
   const tone = { rearing: 'ok', incubating: 'warn', laying: 'warn', awaiting_close: 'info', resting: 'muted', idle: 'muted', no_pair: 'muted' }[s.status];
@@ -78,9 +81,8 @@ export function smartCard(store, row) {
     <div class="sc-actions">
       <button class="btn primary" data-act="today" ${s.pair ? '' : raw('data-no-pair="1"')}>${icon('clipboard')} Cập nhật hôm nay</button>
       <button class="btn soft" data-sact="toggle" aria-expanded="${open ? 'true' : 'false'}">${icon('chevron')} ${open ? 'Thu gọn' : 'Mở rộng'}</button>
+      <button class="btn soft" data-act="history">${icon('history')} Lịch sử</button>
     </div>
-    ${canW && need && !s.checkedToday ? html`<button class="btn ghost sc-nochange" data-sact="nochange">${icon('check')} Đã kiểm tra — Không thay đổi</button>` : ''}
-    ${canW && s.check.noChangeToday ? html`<button class="link sc-undo" data-sact="revoke" data-id="${s.check.noChangeToday.id}">Bấm nhầm? Bỏ xác nhận "Không thay đổi"</button>` : ''}
     ${open ? expandedBody(store, row, foster, eggs, loss) : ''}
   </article>`;
 }
@@ -100,6 +102,7 @@ function barRow(store, bar, canW) {
         ${bar.kind === 'chick' ? html`<button class="btn ghost xs" data-sact="wean" data-src="${bar.source}">Tách mẹ</button>` : ''}
         ${g?.kind === 'egg' ? html`<button class="btn ghost xs" data-gact="hatch" data-id="${g.id}">Ghi nở</button>` : ''}
         ${g?.kind === 'chick' ? html`<button class="btn ghost xs" data-gact="fledge" data-id="${g.id}">Ra ràng</button>` : ''}
+        ${bar.own && bar.kind === 'chick' ? html`<button class="btn ghost xs" data-sact="fledge" data-clutch="${bar.clutch.id}">Ra ràng</button>` : ''}
         <button class="btn ghost xs danger-text" data-sact="loss" data-src="${bar.source}" aria-label="Ghi hao hụt ${bar.qty} ${KIND_LABELS[bar.kind]}">${icon('x')}</button>
       </span>` : ''}</div>
   </div>`;
@@ -113,7 +116,6 @@ function expandedBody(store, row, foster, eggs, loss) {
   const bars = progressBars(db, id, today, b);
   const events = cageEvents(db, id).filter((e) => e.type !== 'reverse').slice(0, 5);
   const groups = [...b.eggSegments, ...b.segments].filter((x) => x.group);
-  const q = b.clutch ? clutchQuality(db, b.clutch) : null;
   return html`<div class="sc-more">
     ${foster.state === 'mixed' ? html`<p class="small sc-foster">Viền đỏ: lứa này đã có đảo tổ (nhận ${foster.inN} · chuyển đi ${foster.outN}${foster.groupCount ? ` · ${foster.groupCount} nhóm không thuộc lứa` : ''}). Không có nghĩa là lồng có bệnh.</p>` : ''}
     ${s.warnings.length || s.checks.length || s.openHealth.length || s.longRest || b.over ? html`<div class="sc-alerts">
@@ -140,12 +142,8 @@ function expandedBody(store, row, foster, eggs, loss) {
       <button class="link" data-gact="detail" data-id="${x.group.id}">Đường đi</button></p>`)}
     ${events.length ? html`<div class="timeline">${events.map((e) => eventRow(store, e))}</div>` : groups.length ? '' : html`<p class="small muted">Chưa có đảo tổ.</p>`}
 
-    ${q ? html`<div class="sc-section"><h3>Chất lượng lứa ${b.clutch.code}</h3></div>
-    <dl class="sc-quality">
-      <div><dt>Trứng đã đẻ</dt><dd>${q.eggsLaid}</dd></div><div><dt>Ghi nhận có cồ</dt><dd>${q.fertileSeen}</dd></div>
-      <div><dt>Đã nở</dt><dd>${q.hatched}</dd></div><div><dt>Trứng vỡ / hỏng</dt><dd>${q.eggsLost}</dd></div>
-      <div><dt>Chim non chết / mất</dt><dd>${q.chicksDead}</dd></div><div><dt>Ra ràng</dt><dd>${q.fledged}</dd></div>
-      <div><dt>Đã tách mẹ</dt><dd>${q.weaned}</dd></div><div><dt>Chuyển đi / đến</dt><dd>${q.movedOut} / ${q.movedIn}</dd></div></dl>` : ''}
+    <div class="sc-section"><h3>Các lứa đang mở (${b.parts.length})</h3>${canW && s.pair ? html`<button class="btn primary sm" data-sact="add-clutch">${icon('plus')} Thêm lứa sinh sản</button>` : ''}</div>
+    ${b.parts.length ? b.parts.map((p) => partBlock(db, p, canW)) : html`<p class="small muted">Chưa có lứa đang mở. Bấm "Thêm lứa sinh sản" khi chim mái bắt đầu đẻ đợt mới.</p>`}
 
     <div class="sc-tools">
       ${canW ? html`<button class="btn soft" data-sact="add">${icon('plus')} Thêm</button>
@@ -158,6 +156,24 @@ function expandedBody(store, row, foster, eggs, loss) {
       <button class="btn ghost" data-sact="toggle">Thu gọn</button>
     </div>
   </div>`;
+}
+
+/** Một lứa đang mở trong phần mở rộng: số riêng của lứa, kết thúc lứa, báo cáo. */
+function partBlock(db, part, canW) {
+  const c = part.clutch;
+  const q = clutchQuality(db, c);
+  return html`<div class="sc-part" data-part="${c.id}">
+    <div class="sc-part-head"><b>${clutchTitle(c)}</b><span class="small muted">từ ${fmtDateShort(c.start_date)}</span>
+      <span class="sc-part-now"><b>${part.own?.eggs || 0}</b> trứng · <b>${part.own?.chicks || 0}</b> chim non</span></div>
+    <dl class="sc-quality">
+      <div><dt>Trứng đã đẻ</dt><dd>${q.eggsLaid}</dd></div><div><dt>Ghi nhận có cồ</dt><dd>${q.fertileSeen}</dd></div>
+      <div><dt>Đã nở</dt><dd>${q.hatched}</dd></div><div><dt>Trứng vỡ / hỏng</dt><dd>${q.eggsLost}</dd></div>
+      <div><dt>Chim non chết / mất</dt><dd>${q.chicksDead}</dd></div><div><dt>Ra ràng</dt><dd>${q.fledged}</dd></div>
+      <div><dt>Đã tách mẹ</dt><dd>${q.weaned}</dd></div><div><dt>Chuyển đi / đến</dt><dd>${q.movedOut} / ${q.movedIn}</dd></div></dl>
+    <div class="sc-part-btns">
+      <button class="btn ghost sm" data-sact="report" data-clutch="${c.id}">${icon('info')} Báo cáo lứa</button>
+      ${canW ? html`<button class="btn soft sm" data-sact="finish" data-clutch="${c.id}">${icon('check')} Kết thúc lứa</button>` : ''}
+    </div></div>`;
 }
 
 export function smartListBody(store, rows, filtered) {
@@ -202,8 +218,10 @@ export function bindSmartCards(root, app) {
       if (expanded.has(cageId)) expanded.delete(cageId); else expanded.add(cageId);
       return app.render();
     }
-    if (a === 'nochange') return markNoChange(app, cageId, b);
-    if (a === 'revoke') return revokeCheck(app, b);
+    if (a === 'add-clutch') return openAddClutch(app, cageId);
+    if (a === 'finish') return openCloseClutch(app, b.dataset.clutch);
+    if (a === 'report') return openClutchReport(app, b.dataset.clutch);
+    if (a === 'fledge') return openClutchFledge(app, b.dataset.clutch);
     if (a === 'eggcheck') return openEggCheck(app, cageId);
     if (a === 'loss') return openLossSheet(app, cageId, b.dataset.src);
     if (a === 'add') return openAddSheet(app, cageId);
@@ -217,33 +235,58 @@ function broodOf(app, cageId) {
   return cageBrood(app.store.db, cageId, app.store.today(), app.store.settings);
 }
 
-async function markNoChange(app, cageId, btn) {
-  await busy(btn, async () => {
-    const r = await app.store.brood('cage_check_no_change', { request_id: newRequestId(), cage_id: cageId });
-    if (!r.ok) { toast(r.errors.join('; '), 'error'); return; }
-    toast(`Đã xác nhận ${app.store.byId('cages', cageId)?.code}: không thay đổi`);
-    advanceToNext(app, cageId);
-  });
-}
-
-async function revokeCheck(app, btn) {
-  await busy(btn, async () => {
-    const r = await app.store.brood('cage_check_revoke', { check_id: btn.dataset.id });
-    toast(r.ok ? 'Đã bỏ xác nhận — lồng trở lại "Chưa cập nhật"' : r.errors.join('; '), r.ok ? 'ok' : 'error');
-    if (r.ok) app.render();
+// ---------- Chim non của lứa ra lồng phóng: một lần lưu, tổ giảm và lồng phóng tăng cùng lúc ----------
+export function openClutchFledge(app, clutchId) {
+  const store = app.store; const today = store.today();
+  const c = store.byId('clutches', clutchId);
+  const part = broodOf(app, c.cage_id).parts.find((p) => p.clutch.id === clutchId);
+  const max = part?.own?.chicks || 0;
+  if (!max) { toast('Lứa không còn chim non', 'warn'); return; }
+  const pens = store.db.flight_pens.filter((p) => !p.archived).sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  if (!pens.length) { toast('Chưa có lồng phóng đang sử dụng', 'warn'); return; }
+  const requestId = newRequestId();
+  openSheet({
+    title: `Ra ràng → lồng phóng · ${clutchTitle(c)}`, subtitle: `Lứa còn ${max} chim non`,
+    body: html`<form class="form" data-fl novalidate>
+      ${field('Chuyển vào lồng', html`<select name="to_pen_id">${options(Object.fromEntries(pens.map((p) => [p.id, p.name])))}</select>`)}
+      <div class="grid2">${field('Số lượng', html`<input type="number" name="qty" value="1" min="1" max="${max}" step="1" inputmode="numeric">`, `Tối đa ${max}`)}
+        ${field('Ngày', html`<input type="date" name="event_date" value="${today}" max="${today}" min="${addDays(today, -BACKDATE_DAYS)}">`)}</div>
+      ${field('Ghi chú (tuỳ chọn)', html`<textarea name="note" rows="2" maxlength="500"></textarea>`)}
+      <div class="form-msg" data-msg></div></form>`,
+    footer: html`<button class="btn ghost" data-close>Huỷ</button><button class="btn primary" data-save>${icon('check')} Lưu thay đổi</button>`,
+    onMount: (el, close) => el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+      const v = formValues(el.querySelector('[data-fl]')); const qty = Number(v.qty);
+      if (!Number.isInteger(qty) || qty < 1 || qty > max) return showMessages(el.querySelector('[data-msg]'), [`Số lượng từ 1 đến ${max}`]);
+      const r = await store.brood('brood_clutch_fledge', { request_id: requestId, clutch_id: clutchId, qty, to_pen_id: v.to_pen_id, event_date: v.event_date, note: v.note });
+      if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);
+      toast(r.result?.duplicate ? 'Thao tác này đã được lưu trước đó — không ghi trùng' : `Đã chuyển ${qty} chim non ra lồng phóng`);
+      close();
+    })),
   });
 }
 
 // ---------- Soi trứng theo số lượng ----------
-export function openEggCheck(app, cageId) {
+export function openEggCheck(app, cageId, clutchId = null) {
   const store = app.store; const cage = store.byId('cages', cageId);
   const b = broodOf(app, cageId);
-  const now = eggBreakdown(store.db, cageId, b);
+  const holders = b.parts.filter((p) => p.own?.eggs);
+  // Nhiều lứa còn trứng: soi theo từng lứa
+  const multi = holders.length > 1;
+  if (multi && !clutchId) {
+    openSheet({
+      title: 'Soi trứng của lứa nào?', subtitle: cage.code,
+      body: html`<div class="list">${holders.map((p) => html`<button class="row sc-pick" data-pick="${p.clutch.id}"><span class="grow"><span class="title">${clutchTitle(p.clutch)}</span><br><span class="desc">${p.own.eggs} trứng</span></span>${icon('chevron')}</button>`)}</div>`,
+      onMount: (el, close) => el.addEventListener('click', (e) => { const x = e.target.closest('[data-pick]'); if (x) { close(); openEggCheck(app, cageId, x.dataset.pick); } }),
+    });
+    return;
+  }
+  const part = multi ? holders.find((p) => p.clutch.id === clutchId) : null;
+  const now = eggBreakdown(store.db, cageId, part ? { eggs: part.own.eggs, clutch: part.clutch, own: part.own, parts: [part], eggSegments: [] } : b);
   if (!now.total) { toast('Lồng không có trứng để soi', 'warn'); return; }
   const requestId = newRequestId();
   const history = (store.db.cage_checks || []).filter((c) => c.cage_id === cageId && c.kind === 'egg_check').sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).slice(0, 5);
   openSheet({
-    title: `Soi trứng · ${cage.code}`, subtitle: `Tổ đang có ${now.total} trứng — chỉ cần nhập số lượng, không cần biết quả nào`,
+    title: `Soi trứng · ${cage.code}${part ? ` · ${clutchTitle(part.clutch)}` : ''}`, subtitle: `${part ? 'Lứa' : 'Tổ'} đang có ${now.total} trứng — chỉ cần nhập số lượng, không cần biết quả nào`,
     body: html`<form class="form" data-ec novalidate>
       ${stepper('fertile_seen', 'Thấy dấu hiệu có cồ', now.fertile, { hint: 'Màu xanh trên thẻ' })}
       ${stepper('not_seen', 'Đã soi, chưa thấy cồ', now.notSeen, { hint: 'Chưa phải kết luận không cồ' })}
@@ -261,7 +304,7 @@ export function openEggCheck(app, cageId) {
         const v = read();
         if (![v.fertile, v.notSeen].every((x) => Number.isInteger(x) && x >= 0)) return showMessages(el.querySelector('[data-msg]'), ['Số trứng phải là số nguyên từ 0 trở lên']);
         if (v.fertile + v.notSeen > now.total) return showMessages(el.querySelector('[data-msg]'), [`Tổ chỉ có ${now.total} trứng`]);
-        const r = await store.brood('brood_egg_check', { request_id: requestId, cage_id: cageId, fertile_seen: v.fertile, not_seen: v.notSeen, expected_total: now.total, note: v.note });
+        const r = await store.brood('brood_egg_check', { request_id: requestId, cage_id: cageId, ...(part ? { clutch_id: part.clutch.id } : {}), fertile_seen: v.fertile, not_seen: v.notSeen, expected_total: now.total, note: v.note });
         if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);
         toast(`Đã lưu soi trứng ${cage.code}: ${v.fertile} có cồ, ${v.notSeen} chưa thấy cồ`);
         close();
@@ -274,8 +317,10 @@ export function openEggCheck(app, cageId) {
 function sourcesOf(store, cageId) {
   const b = cageBrood(store.db, cageId, store.today(), store.settings);
   return [
-    ...(b.own?.eggs ? [{ key: 'clutch:egg', kind: 'egg', qty: b.own.eggs, label: `${b.own.eggs} trứng · lứa ${b.clutch.code}`, clutch: b.clutch }] : []),
-    ...(b.own?.chicks ? [{ key: 'clutch:chick', kind: 'chick', qty: b.own.chicks, label: `${b.own.chicks} chim non · lứa ${b.clutch.code}`, clutch: b.clutch }] : []),
+    ...b.parts.flatMap((p) => [
+      ...(p.own?.eggs ? [{ key: `clutch:${p.clutch.id}:egg`, kind: 'egg', qty: p.own.eggs, label: `${p.own.eggs} trứng · ${clutchTitle(p.clutch)}`, clutch: p.clutch }] : []),
+      ...(p.own?.chicks ? [{ key: `clutch:${p.clutch.id}:chick`, kind: 'chick', qty: p.own.chicks, label: `${p.own.chicks} chim non · ${clutchTitle(p.clutch)}`, clutch: p.clutch }] : []),
+    ]),
     ...[...b.eggSegments, ...b.segments].filter((s) => s.group).map((s) => ({ key: `group:${s.group.id}`, kind: s.kind, qty: s.qty, label: `${s.qty} ${KIND_LABELS[s.kind]} · ${s.label}`, group: s.group })),
   ];
 }
@@ -319,11 +364,13 @@ export function openLossSheet(app, cageId, sourceKey) {
 // ---------- + Thêm ----------
 export function openAddSheet(app, cageId) {
   const store = app.store; const today = store.today(); const cage = store.byId('cages', cageId);
-  const hasClutch = !!openClutch(store.db.clutches, cageId);
+  const parts = broodOf(app, cageId).parts;
+  const hasClutch = parts.length > 0;
   openSheet({
     title: `Thêm · ${cage.code}`, subtitle: 'Nhập số phát sinh, app tự cộng vào tổng của lứa',
     body: html`<form class="form" data-ad novalidate>
       ${field('Ghi nhận', html`<select name="type">${options({ egg: 'Trứng mới đẻ của cặp trong lồng', ...(hasClutch ? { hatch: 'Chim non mới nở từ trứng của lứa' } : {}), group: 'Trứng / chim non có sẵn, không thuộc lứa này' }, 'egg')}</select>`)}
+      ${parts.length > 1 ? field('Thuộc lứa', html`<select name="clutch_id">${options(Object.fromEntries(parts.slice().reverse().map((p) => [p.clutch.id, `${clutchTitle(p.clutch)} · ${p.own?.eggs || 0} trứng · ${p.own?.chicks || 0} chim non`])))}</select>`) : ''}
       <div data-qf><div class="grid2">${field('Số lượng', html`<input type="number" name="qty" value="1" min="1" step="1" inputmode="numeric">`)}
         ${field('Ngày', html`<input type="date" name="date" value="${today}" max="${today}">`)}</div></div>
       <div class="form-msg" data-msg></div></form>`,
@@ -334,7 +381,7 @@ export function openAddSheet(app, cageId) {
       el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => {
         const v = formValues(f);
         if (v.type === 'group') { close(); openCreateGroup(app, cageId); return; }
-        const plan = planQuickAdd(store.db, { cage_id: cageId, type: v.type, qty: Number(v.qty), date: v.date }, store.ctx());
+        const plan = planQuickAdd(store.db, { cage_id: cageId, clutch_id: v.clutch_id, type: v.type, qty: Number(v.qty), date: v.date }, store.ctx());
         if (plan.errors?.length) return showMessages(el.querySelector('[data-msg]'), plan.errors);
         const r = await store.run(plan, { requires: 'breeding.write' });
         if (!r.ok) return showMessages(el.querySelector('[data-msg]'), r.errors);

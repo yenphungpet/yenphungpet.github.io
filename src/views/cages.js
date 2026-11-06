@@ -10,10 +10,11 @@ import { openPairSheet } from './pairing-sheet.js';
 import { currentPair, byCageCode } from '../domain/breeding.js';
 import { openHealthForm } from './health.js';
 import { noteBlock, noteList, bindNoteActions } from './notes-ui.js';
-import { notesOfLog } from '../domain/notes.js';
-import { broodStrip, broodPanel, bindBroodPanel, openBroodSheet } from './brood-ui.js';
-import { cageBrood } from '../domain/brood.js';
+import { notesOfLog, notesOfCage } from '../domain/notes.js';
+import { broodStrip, broodPanel, bindBroodPanel, openBroodSheet, eventRow, openReverse } from './brood-ui.js';
+import { cageBrood, cageEvents } from '../domain/brood.js';
 import { smartRows, counterText, smartListBody, bindSmartCards, advanceToNext } from './cage-smart.js';
+import { clutchesPanel, bindClutchesPanel } from './clutch-ui.js';
 
 const FILTERS = [
   ['all', 'Tất cả'], ['notlogged', 'Chưa ghi hôm nay'], ['stale', 'Lâu chưa cập nhật'], ['active', 'Có lứa'],
@@ -164,7 +165,7 @@ export function logCard(store, log, prev, { editable = true, today } = {}) {
   return html`<div class="tl-item ${log.log_date === today ? 'today' : ''}">
     <div class="tl-head"><b>${fmtDate(log.log_date)}</b>${log.log_date === today ? badge('Hôm nay', 'ok') : ''}
       ${clutch ? badge(clutch.code, 'info') : badge('Không thuộc lứa', 'muted')}${log.auto_brood ? badge('Tự tạo khi chuyển lồng / soi trứng / hao hụt — chưa phải báo cáo ngày', 'muted') : ''}<span class="grow"></span>
-      ${editable ? html`<button class="btn soft sm" data-edit-log="${log.id}" data-cage-id="${log.cage_id}">${icon('edit')} Sửa</button>` : ''}</div>
+      ${editable && (clutch?.status !== 'closed' || store.can('clutch.edit')) ? html`<button class="btn soft sm" data-edit-log="${log.id}" data-cage-id="${log.cage_id}">${icon('edit')} Sửa</button>` : ''}</div>
     ${clutch ? html`<div class="small num">Trứng ${log.eggs} · có cồ ${log.fertile} · không cồ ${log.infertile} · hỏng ${log.damaged} · nở ${log.hatched} · non ${log.chicks} · ra ràng ${log.fledged}${log.eggs_out || log.chicks_out ? ` · đã chuyển sang lồng khác: ${log.eggs_out || 0} trứng, ${log.chicks_out || 0} non` : ''}</div>` : ''}
     ${d ? html`<div class="tl-delta">Biến động so với lần trước: ${d}</div>` : ''}
     <div class="small muted">Bố mẹ: ${log.parents_status} · Tổ: ${log.nest_status}</div>
@@ -198,8 +199,44 @@ function bindHistory(root, app) {
   bindNoteActions(root, app);
 }
 
+/** Biến động trứng / chim của lồng theo thời gian (đi, đến, hao hụt, ra ràng, hoàn tác). */
+function eventsHtml(store, cageId, limit = 40) {
+  const ev = cageEvents(store.db, cageId).slice(0, limit);
+  return ev.length ? html`<div class="timeline">${ev.map((e) => eventRow(store, e))}</div>` : html`<p class="small muted">Chưa có biến động trứng / chim.</p>`;
+}
+
 export function openHistory(app, cageId) {
   const cage = app.store.byId('cages', cageId);
+  if (app.store.smartCards) {
+    const store = app.store;
+    const loose = notesOfCage(store.db, cageId).filter((n) => !n.log_id);
+    openSheet({
+      title: `Lịch sử ${cage.code}`, subtitle: 'Nhật ký, ghi chú, ảnh, biến động và các lứa', size: 'wide',
+      body: html`<div class="tabs" role="tablist"><button type="button" class="tab active" data-htab="logs">Nhật ký</button><button type="button" class="tab" data-htab="clutches">Các lứa</button></div>
+        <div data-hpanel="logs">
+          <details class="card sc-hist-more"><summary>Biến động trứng / chim</summary>${eventsHtml(store, cageId)}</details>
+          ${loose.length ? html`<details class="card sc-hist-more"><summary>Ghi chú không gắn nhật ký (${loose.length})</summary>${noteList(store, loose)}</details>` : ''}
+          ${historyHtml(store, cageId)}
+          <a class="btn ghost block" href="#/cage/${cageId}?tab=history">Xem toàn bộ nhật ký</a>
+        </div>
+        <div data-hpanel="clutches" class="hidden">${clutchesPanel(store, cageId)}</div>`,
+      onMount: (el) => {
+        bindHistory(el, app);
+        bindClutchesPanel(el, app);
+        el.addEventListener('click', (e) => {
+          const t = e.target.closest('[data-htab]');
+          if (t) {
+            el.querySelectorAll('[data-htab]').forEach((x) => x.classList.toggle('active', x === t));
+            el.querySelectorAll('[data-hpanel]').forEach((x) => x.classList.toggle('hidden', x.dataset.hpanel !== t.dataset.htab));
+          }
+          const r = e.target.closest('[data-reverse]');
+          if (r) openReverse(app, r.dataset.reverse);
+        });
+        import('../services/photos.js').then((m) => m.hydratePhotos(store, el));
+      },
+    });
+    return;
+  }
   openSheet({
     title: `Lịch sử ${cage.code}`, subtitle: 'Nhật ký theo thời gian (mới nhất trước)', size: 'wide',
     body: historyHtml(app.store, cageId),
@@ -218,7 +255,7 @@ export function renderDetail(app, { id }, query) {
   let body;
   if (tab === 'brood' && s.groupsEnabled) body = broodPanel(s, id);
   else if (tab === 'history') body = historyHtml(s, id, 400);
-  else if (tab === 'clutches') body = clutchesTab(s, id);
+  else if (tab === 'clutches') body = s.smartCards ? clutchesPanel(s, id) : clutchesTab(s, id);
   else if (tab === 'rest') body = restTab(s, st, canW);
   else if (tab === 'mates') body = matesTab(s, id, canW);
   else if (tab === 'health') body = healthTab(s, id);
@@ -234,6 +271,7 @@ export function renderDetail(app, { id }, query) {
     mount(root) {
       bindCageCards(root, app);
       bindHistory(root, app);
+      if (tab === 'clutches' && s.smartCards) bindClutchesPanel(root, app);
       if (tab === 'brood' && s.groupsEnabled) bindBroodPanel(root, app, id);
       root.querySelector('[data-cage-edit]')?.addEventListener('click', () => openCageForm(app, id));
       root.addEventListener('click', (e) => {
@@ -274,10 +312,10 @@ function overviewTab(s, st, canW) {
         ${canW ? html`<div class="btn-row" style="margin-top:12px"><button class="btn soft" data-do="mate">${icon('swap')} Thay trống / Thay mái / Kết thúc cặp</button></div>` : ''}`
       : html`<p class="muted">Lồng chưa ghép cặp.</p>${canW ? html`<button class="btn primary block" data-do="pair">${icon('plus')} Ghép cặp cho lồng</button>` : ''}`}
     </div>
-    ${st.clutch && canW ? html`<div class="section"><h2>Lứa đang mở · ${st.clutch.code}</h2><a href="#/clutch/${st.clutch.id}">Chi tiết lứa</a></div>
+    ${canW ? st.clutches.map((k) => html`<div class="section"><h2>Lứa đang mở · ${k.code}</h2><a href="#/clutch/${k.id}">Chi tiết lứa</a></div>
       <div class="card"><p class="small muted">Kết thúc lứa khi đã tách hết chim non (bắt đầu tính nghỉ đẻ) hoặc khi lứa hỏng.</p>
-      <button class="btn soft block" data-do="close" data-id="${st.clutch.id}">${icon('check')} Kết thúc lứa</button>
-      ${s.can('clutch.edit') ? html`<button class="btn ghost block" data-do="clutch-start" data-id="${st.clutch.id}" style="margin-top:8px">${icon('edit')} Sửa ngày bắt đầu lứa (${fmtDate(st.clutch.start_date)})</button>` : ''}</div>` : ''}
+      <button class="btn soft block" data-do="close" data-id="${k.id}">${icon('check')} Kết thúc lứa</button>
+      ${s.can('clutch.edit') ? html`<button class="btn ghost block" data-do="clutch-start" data-id="${k.id}" style="margin-top:8px">${icon('edit')} Sửa ngày bắt đầu lứa (${fmtDate(k.start_date)})</button>` : ''}</div>`) : ''}
     ${!st.clutch && st.rest.state !== 'resting' && st.pair && canW ? html`<div class="card" style="margin-top:12px"><p class="small muted">Lồng không có lứa mở và chưa có kỳ nghỉ. Xác nhận ngày bắt đầu nghỉ để tính số ngày nghỉ đẻ.</p>
       <button class="btn soft block" data-do="rest-start">${icon('moon')} Xác nhận bắt đầu nghỉ</button></div>` : ''}
     ${perf ? html`<div class="section"><h2>Hiệu suất cặp hiện tại</h2><a href="#/performance">So sánh</a></div>

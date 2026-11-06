@@ -4,7 +4,7 @@
 //  - Chim giống đã ghép đang nằm trong lồng sinh sản KHÔNG được tính vào "Lồng Chim Giống".
 
 import { cageState, DEFAULT_SETTINGS } from './breeding.js';
-import { penBalance } from './stock.js';
+import { penBalance, penSummary } from './stock.js';
 import { breederStats, birdAnomalies } from './breeders.js';
 import { summarize, filterTx } from './finance.js';
 import { debtSummary, salesRevenue } from './sales.js';
@@ -16,9 +16,12 @@ export const METRIC_DEFS = {
   cages: 'Số lồng sinh sản đang sử dụng (không tính lồng đã lưu trữ).',
   activeCages: 'Lồng có lứa đang mở (chờ trứng, đang ấp, nuôi con hoặc chờ kết thúc lứa).',
   resting: 'Lồng có kỳ nghỉ đẻ đang mở (đã xác nhận ngày bắt đầu nghỉ).',
-  eggs: 'Trứng đang theo dõi = Σ (đã đẻ − đã nở − hỏng − không cồ) của các lứa đang mở.',
-  chicks: 'Σ chim non hiện tại của các lứa đang mở + nhóm chim non nhận từ lồng khác (chim còn trong lồng sinh sản).',
+  eggs: 'Trứng thực tế còn trong tổ = Σ (đã đẻ − đã nở − hỏng − không cồ − đã chuyển đi) của mọi lứa đang mở + nhóm trứng nhận từ lồng khác.',
+  chicks: 'Σ chim non hiện tại của mọi lứa đang mở + nhóm chim non nhận từ lồng khác. Không tính chim đã chết hoặc đã ra lồng phóng.',
   pen: 'Tồn hiện tại theo sổ biến động của lồng phóng.',
+  penTotal: 'Tổng chim ở các lồng phóng đang sử dụng theo sổ biến động, gồm cả chim đã kiểm kê nhưng chưa rõ nguồn gốc. Chuyển giữa các lồng phóng không làm đổi tổng. Không cộng lồng đã ngừng sử dụng.',
+  saleable: 'Chỉ tính chim đã được xác nhận đủ điều kiện bán. Hiện hệ thống chưa có dữ liệu xác nhận này nên hiển thị "Chưa xác định", không tự suy từ số chim lồng phóng.',
+  breederTotal: 'Số cá thể chim giống còn sống, thuộc trại. Mỗi cá thể đếm một lần dù từng ghép nhiều cặp hay nhiều lồng. Không tính chim ở lồng đã lưu trữ.',
   breederPen: 'Số cá thể đang ở Lồng Chim Giống (trạng thái “Trong Lồng Chim Giống”). Không gồm chim đang ghép — số “đang ghép ở lồng SS” bên dưới là bố mẹ thuộc cặp đang mở của lồng sinh sản đang dùng (2 con mỗi cặp).',
   checks: 'Đối chiếu tự động, không sửa dữ liệu: ra ràng ↔ nhập lồng phóng, đã nở ≠ chim non hiện tại + ra ràng (cần đối chiếu — không tự suy ra chết/mất), trứng chờ quá lâu, nhật ký mâu thuẫn, số cộng dồn giảm, trạng thái chim lệch với cặp ghép.',
 };
@@ -39,9 +42,13 @@ export function dashboardMetrics(db, today, settings = DEFAULT_SETTINGS) {
     activeCages: states.filter((s) => s.clutch).length,
     resting: states.filter((s) => s.rest.state === 'resting').length,
     // + nhóm trứng / chim non nhận từ lồng khác (V2.1, 0012) — không nằm trong nhật ký lứa nên không bị cộng 2 lần
-    eggs: states.reduce((a, s) => a + (s.summary ? s.summary.pending : 0), 0) + groupSum(db, states, 'egg'),
-    chicks: states.reduce((a, s) => a + (s.summary ? s.summary.chicks : 0), 0) + groupSum(db, states, 'chick'),
+    eggs: states.reduce((a, s) => a + s.summaries.reduce((x, c) => x + c.summary.pending, 0), 0) + groupSum(db, states, 'egg'),
+    chicks: states.reduce((a, s) => a + s.summaries.reduce((x, c) => x + c.summary.chicks, 0), 0) + groupSum(db, states, 'chick'),
     pens: pens.map((p) => ({ pen: p, qty: penBalance(db.stock_movements, p.id) })),
+    penTotal: pens.reduce((a, p) => a + penBalance(db.stock_movements, p.id), 0),
+    penOriginUnknown: pens.reduce((a, p) => a + penSummary(db.stock_movements, p.id).originUnknown, 0),
+    penReconcile: penReconcile(db),
+    saleable: { known: false, qty: null },
     breeders: breederStats(db.birds, db),
     month: summarize(monthTx),
     debt: debtSummary(db.orders, db.payments),
@@ -59,6 +66,12 @@ export function dashboardMetrics(db, today, settings = DEFAULT_SETTINGS) {
     ],
   };
   return { states, metrics, alerts };
+}
+
+/** Lồng đã ngừng sử dụng nhưng sổ còn số chim: không cộng vào tổng, báo riêng để đối soát. Không tự đổi số. */
+export function penReconcile(db) {
+  const rows = db.flight_pens.filter((p) => p.archived).map((p) => ({ pen: p, qty: penBalance(db.stock_movements, p.id) })).filter((x) => x.qty !== 0);
+  return { pens: rows.length, qty: rows.reduce((a, x) => a + x.qty, 0) };
 }
 
 // Số cảnh báo cần xem (đối chiếu mức "tham khảo" không tính) — để lời chào không báo "ổn" khi còn cảnh báo
@@ -84,7 +97,7 @@ export function todayTasks(db, today, settings = DEFAULT_SETTINGS, role = 'owner
     const gap = daysBetween(last, today);
     if (gap >= 1) tasks.push({ kind: 'health', icon: 'heart', title: `Theo dõi sức khoẻ: ${h.symptoms.slice(0, 40)}`, detail: `Lần ghi gần nhất ${gap} ngày trước`, href: `#/health/${h.id}` });
   }
-  const awaiting = states.filter((s) => s.summary?.stage === 'awaiting_close');
+  const awaiting = states.flatMap((s) => s.summaries.filter((x) => x.summary.stage === 'awaiting_close').map((x) => ({ cage: s.cage, clutch: x.clutch })));
   // Ghi chú "Cần xử lý" (mọi vai trò) — còn hiện tới khi có người xác nhận "Đã xử lý"
   for (const n of openActionNotes(db)) {
     const cage = db.cages.find((c) => c.id === n.cage_id);

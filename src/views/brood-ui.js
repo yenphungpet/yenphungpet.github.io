@@ -5,7 +5,7 @@ import { html, raw } from '../ui/html.js';
 import { icon } from '../ui/icons.js';
 import { openSheet, field, options, showMessages, formValues, busy, toast, badge, empty } from '../ui/components.js';
 import { fmtDate, fmtDateShort, fmtDateTime, addDays } from '../core/dates.js';
-import { byCageCode } from '../domain/breeding.js';
+import { byCageCode, clutchTitle } from '../domain/breeding.js';
 import {
   cageBrood, planTransfer, newRequestId, ageInfo, stageOf, BROOD_STAGES, STAGE_DISCLAIMER, EGG_CHECK_LABELS, LOSS_REASONS, EVENT_LABELS,
   KIND_LABELS, originText, groupLineage, groupPath, cageEvents, eventText, reverseCheck, clutchHatchRange, INCUBATION_DAYS, BACKDATE_DAYS, backdatedDays,
@@ -77,7 +77,7 @@ export function broodPanel(store, cageId) {
   const canW = store.can('breeding.write');
   const seg = (s) => {
     const g = s.group;
-    const src = g ? `group:${g.id}` : `clutch:${s.kind}`;
+    const src = g ? `group:${g.id}` : `clutch:${s.clutch.id}:${s.kind}`;
     return html`<div class="row brood-row"><span class="row-icon ${s.kind === 'egg' ? 'gold' : 'green'}">${s.kind === 'egg' ? icon('egg') : raw('🐣')}</span>
       <span class="grow"><span class="title">${s.qty} ${KIND_LABELS[s.kind]} · ${s.label}</span>${g?.origin_kind === 'unknown' ? html` ${badge('Chưa rõ nguồn gốc', 'warn')}` : ''}<br>
         ${s.kind === 'chick' ? html`${ageChip(s.age)}${s.age.basis !== 'unknown' ? html` · <span class="small">${stageOf(s.age.max)?.label}</span>` : ''}` : html`<span class="small muted">${g ? EGG_CHECK_LABELS[g.egg_check] : 'Trứng chờ kết quả của lứa'}</span>`}
@@ -142,18 +142,23 @@ export function openTransferForm(app, cageId, sourceKey) {
   const requestId = newRequestId(); // giữ nguyên khi bấm lại ⇒ máy chủ không ghi trùng
   const b = cageBrood(db, cageId, today, store.settings);
   const sources = [
-    ...(b.own?.eggs ? [[`clutch:egg`, `${b.own.eggs} trứng chờ kết quả · lứa ${b.clutch.code}`]] : []),
-    ...(b.own?.chicks ? [[`clutch:chick`, `${b.own.chicks} chim non · lứa ${b.clutch.code}`]] : []),
+    ...b.parts.flatMap((p) => [
+      ...(p.own?.eggs ? [[`clutch:${p.clutch.id}:egg`, `${p.own.eggs} trứng chờ kết quả · ${clutchTitle(p.clutch)}`]] : []),
+      ...(p.own?.chicks ? [[`clutch:${p.clutch.id}:chick`, `${p.own.chicks} chim non · ${clutchTitle(p.clutch)}`]] : []),
+    ]),
     ...[...b.eggSegments, ...b.segments].filter((s) => s.group).map((s) => [`group:${s.group.id}`, `${s.qty} ${KIND_LABELS[s.kind]} · ${s.label}${s.kind === 'chick' ? ` · ${s.age.text}` : ''}`]),
   ];
   if (!sources.length) { toast('Lồng không có trứng / chim non để chuyển', 'warn'); return; }
   let src = sources.some(([k]) => k === sourceKey) ? sourceKey : sources[0][0];
   const targets = db.cages.filter((c) => !c.archived && !c.deleted && c.id !== cageId).sort(byCageCode)
     .map((c) => { const t = cageBrood(db, c.id, today, store.settings); return [c.id, `${c.code} · ${t.chicks} chim non${t.eggs ? ` · ${t.eggs} trứng` : ''}`]; });
-  const sourceOf = (k) => (k.startsWith('group:') ? { group_id: k.slice(6) } : { clutch_id: b.clutch.id, kind: k.slice(7) });
-  const hint = b.clutch ? clutchHatchRange(db, b.clutch) : null;
   const fromClutch = (k) => k.startsWith('clutch:');
-  const kindOf = (k) => (fromClutch(k) ? k.slice(7) : db.brood_groups.find((g) => g.id === k.slice(6))?.kind);
+  const clutchIdOf = (k) => k.slice(7, k.lastIndexOf(':'));
+  const sourceOf = (k) => (k.startsWith('group:') ? { group_id: k.slice(6) } : { clutch_id: clutchIdOf(k), kind: k.slice(k.lastIndexOf(':') + 1) });
+  // Tuổi ước tính theo nhật ký của lứa chim non đang chọn ban đầu
+  const hintClutch = b.parts.find((p) => p.clutch.id === clutchIdOf(src) && fromClutch(src))?.clutch || b.parts.find((p) => p.own?.chicks)?.clutch || b.clutch;
+  const hint = hintClutch ? clutchHatchRange(db, hintClutch) : null;
+  const kindOf = (k) => (fromClutch(k) ? k.slice(k.lastIndexOf(':') + 1) : db.brood_groups.find((g) => g.id === k.slice(6))?.kind);
   const read = (el) => {
     const v = formValues(el.querySelector('[data-tf]'));
     const input = { request_id: requestId, source: sourceOf(v.source), to_cage_id: v.to_cage_id, qty: Number(v.qty), event_date: v.event_date,
