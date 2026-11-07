@@ -5,7 +5,7 @@ import {
   ORDER_STATUS, PAYMENT_KIND, PAY_METHOD, PAYMENT_STATUS_LABEL, orderTotal, orderSubtotal, orderPaid, orderBalance, paymentStatus,
   debtSummary, planOrderSave, planOrderStatus, planPayment, planDeletePayment, canTransition, salesRevenue,
 } from '../domain/sales.js';
-import { penBalance } from '../domain/stock.js';
+import { flightPens, penBalance } from '../domain/stock.js';
 import { fmtDate, fmtDateTime } from '../core/dates.js';
 import { fmtMoney, fmtMoneyShort, matches, toMoney, toInt } from '../core/format.js';
 import { uid } from '../core/ids.js';
@@ -124,7 +124,7 @@ export function renderOrder(app, { id }) {
 }
 
 function itemHtml(s, it, i) {
-  const pens = s.db.flight_pens.filter((p) => !p.archived);
+  const pens = flightPens(s.db);
   const birds = s.db.birds.filter((b) => b.status === 'holding' || b.status === 'retired' || b.id === it.bird_id);
   return html`<div class="item-line" data-item data-id="${it.id || ''}">
     <div class="grid2">${field(`Dòng ${i + 1} — loại`, html`<select name="kind" data-kind>${options({ pen: 'Chim lồng phóng (theo số lượng)', breeder: 'Chim giống (theo cá thể)', other: 'Sản phẩm khác' }, it.kind || 'pen')}</select>`)}
@@ -145,7 +145,7 @@ export function openOrderForm(app, id, preset = {}) {
   if (!s.can('sales.write')) { toast('Chỉ chủ trại được tạo/sửa đơn', 'error'); return; }
   const o = id ? s.byId('orders', id) : null;
   const items = o ? o.items : (preset.items || [{ kind: 'pen', qty: 1 }]);
-  const pens = s.db.flight_pens.filter((p) => !p.archived);
+  const pens = flightPens(s.db);
   const custOpts = () => raw(`<option value="">— Chọn khách —</option>${s.db.customers.filter((c) => !c.deleted).sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${c.id}"${c.id === o?.customer_id ? ' selected' : ''}>${esc(c.name)}${c.phone ? ' · ' + esc(c.phone) : ''}</option>`).join('')}`);
   openSheet({
     title: o ? `Sửa đơn ${o.code}` : 'Tạo đơn hàng', size: 'wide',

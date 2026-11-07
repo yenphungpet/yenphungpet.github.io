@@ -7,7 +7,7 @@ import { todayVN } from '../core/dates.js';
 import { uid } from '../core/ids.js';
 
 const BROOD_SET = ['brood_groups', 'brood_events', 'daily_logs', 'stock_movements', 'cage_checks', 'brood_refs', 'clutches'];
-const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, cage_checks: BROOD_SET, brood_refs: BROOD_SET, clutches: [...BROOD_SET, 'rest_periods'], daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'], stock_movements: BROOD_SET, birds: ['birds', 'pairs'], pairs: ['birds', 'pairs'] };
+const RELATED = { brood_groups: BROOD_SET, brood_events: BROOD_SET, cage_checks: BROOD_SET, brood_refs: BROOD_SET, clutches: [...BROOD_SET, 'rest_periods'], daily_logs: [...BROOD_SET, 'cage_notes'], cage_notes: ['cage_notes', 'daily_logs'], stock_movements: BROOD_SET, birds: ['birds', 'pairs', 'bird_events', 'stock_movements'], pairs: ['birds', 'pairs', 'bird_events'], bird_events: ['birds', 'pairs', 'bird_events', 'stock_movements'], flight_pens: ['flight_pens', 'birds'] };
 
 const hhmm = (t) => new Date(t).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
@@ -112,7 +112,7 @@ export class Store {
   }
 
   /** So thời điểm sửa mới nhất trên máy chủ với dữ liệu đang có; bảng nào mới hơn ⇒ tải lại bảng đó. Trả về danh sách bảng đã lỡ. */
-  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_checks', 'cage_notes', 'clutches', 'stock_movements', 'flight_pens', 'birds', 'pairs', 'cages', 'rest_periods']) {
+  async probeFreshness(tables = ['daily_logs', 'brood_events', 'brood_groups', 'cage_checks', 'cage_notes', 'clutches', 'stock_movements', 'flight_pens', 'birds', 'bird_events', 'pairs', 'cages', 'rest_periods']) {
     if (!this.adapter.latestStamps) return [];
     const have = tables.filter((t) => Array.isArray(this.db[t]));
     const server = await this.adapter.latestStamps(have);
@@ -186,6 +186,13 @@ export class Store {
   get settings() {
     const row = this.db.settings.find((s) => s.id === 'app');
     return { ...DEFAULT_SETTINGS, ...(row?.value || {}) };
+  }
+
+  /** V2.2.3 Lồng Chim Giống: cần database đã có 0016 (máy chủ cũ bỏ qua cột lạ khi ghi ⇒ phải chặn trước). Demo luôn bật. */
+  get breederArea() {
+    if (this.adapter.kind === 'demo') return true;
+    const m = String(this.db.settings.find((s) => s.id === 'deploy')?.value?.migrations || '').match(/(\d{4})$/);
+    return !!m && Number(m[1]) >= 16;
   }
 
   today() { return todayVN(); }

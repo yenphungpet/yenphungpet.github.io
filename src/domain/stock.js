@@ -15,6 +15,13 @@ export const MOVEMENT_TYPES = {
   adjust_out: { label: 'Điều chỉnh kiểm đếm (−)', from: true, to: false },
 };
 
+/** Lồng giống (V2.2.3): đếm theo hồ sơ từng con, không có dòng trong sổ số lượng. Lồng cũ không có kind = lồng phóng. */
+export const isBreederPen = (p) => p?.kind === 'breeder';
+/** Lồng phóng (đếm theo sổ số lượng). archived: false = đang dùng, true = đã ngừng, null = tất cả. */
+export function flightPens(db, archived = false) {
+  return (db.flight_pens || []).filter((p) => !isBreederPen(p) && (archived === null || !!p.archived === archived)).sort((a, b) => (a.sort || 0) - (b.sort || 0));
+}
+
 const order = (a, b) => (a.date === b.date
   ? String(a.created_at || '').localeCompare(String(b.created_at || ''))
   : a.date.localeCompare(b.date));
@@ -83,7 +90,7 @@ export function planMovement(db, input, ctx) {
     updated_at: now, updated_by: actor,
   };
   if (existing && (existing.qty !== rec.qty || existing.type !== rec.type)) rec.counted_total = null; // sửa tay thì không còn là số đếm được
-  const errors = validateMovementShape(rec, db.flight_pens);
+  const errors = validateMovementShape(rec, flightPens(db, null));
   if (isISODate(rec.date) && rec.date > today) errors.push('Không ghi biến động cho ngày tương lai');
   if (['adjust_in', 'adjust_out', 'loss'].includes(rec.type) && !rec.note) errors.push('Nhập lý do / ghi chú cho điều chỉnh hoặc hao hụt');
   if (errors.length) return { errors, ops: [] };
@@ -145,7 +152,7 @@ const parseCount = (v) => (Number.isInteger(Number(v)) && v !== '' && v !== null
 /** Cập nhật số chim hiện có sau khi đếm. Khớp sổ thì không ghi gì. */
 export function planPenCount(db, input, ctx) {
   const pen = db.flight_pens.find((p) => p.id === input.penId);
-  if (!pen) return { errors: ['Không tìm thấy lồng phóng'], ops: [] };
+  if (!pen || isBreederPen(pen)) return { errors: ['Không tìm thấy lồng phóng'], ops: [] };
   const counted = parseCount(input.counted);
   if (counted === null) return { errors: ['Số chim đếm được phải là số nguyên từ 0 trở lên'], ops: [] };
   const record = countMovement(db, { penId: pen.id, counted, origin: (input.origin || '').trim(), note: (input.note || '').trim() }, ctx);
@@ -167,21 +174,25 @@ export function planPenSave(db, input, ctx) {
   const existing = input.id ? db.flight_pens.find((p) => p.id === input.id) : null;
   const name = (input.name || '').trim();
   const archived = existing ? !!input.archived : false;
+  const kind = existing ? (existing.kind || 'flight') : (input.kind === 'breeder' ? 'breeder' : 'flight');
   const errors = [];
   if (!name) errors.push('Nhập tên lồng');
   else if (name.length > PEN_NAME_MAX) errors.push(`Tên lồng tối đa ${PEN_NAME_MAX} ký tự`);
   if (name && !archived && db.flight_pens.some((p) => p.id !== existing?.id && !p.archived && p.name.toLowerCase() === name.toLowerCase())) errors.push('Tên lồng đã tồn tại');
-  if (existing && archived && !existing.archived) {
+  if (existing && archived && !existing.archived && kind === 'breeder') {
+    const n = (db.birds || []).filter((b) => !b.deleted && b.pen_id === existing.id && b.status === 'holding').length;
+    if (n > 0) errors.push(`${existing.name} còn ${n} chim giống. Hãy chuyển sang lồng khác trước khi ngừng sử dụng.`);
+  } else if (existing && archived && !existing.archived) {
     const bal = penBalance(db.stock_movements, existing.id);
     if (bal > 0) errors.push(`${existing.name} còn ${bal} con. Hãy chuyển hết hoặc cập nhật số chim trước khi ngừng sử dụng.`);
   }
-  const hasInitial = !existing && input.initial !== '' && input.initial !== undefined && input.initial !== null;
+  const hasInitial = !existing && kind === 'flight' && input.initial !== '' && input.initial !== undefined && input.initial !== null;
   const initial = hasInitial ? parseCount(input.initial) : 0;
   if (initial === null) errors.push('Số chim ban đầu phải là số nguyên từ 0 trở lên');
   if (errors.length) return { errors, ops: [] };
   const record = existing
     ? { ...existing, name, purpose: (input.purpose || '').trim(), archived, updated_at: ctx.now, updated_by: ctx.actor }
-    : { id: uid(), name, purpose: (input.purpose || '').trim(), archived: false, sort: Math.max(0, ...db.flight_pens.map((p) => p.sort || 0)) + 1, created_at: ctx.now, created_by: ctx.actor, updated_at: ctx.now, updated_by: ctx.actor };
+    : { id: uid(), name, purpose: (input.purpose || '').trim(), kind, archived: false, sort: Math.max(0, ...db.flight_pens.map((p) => p.sort || 0)) + 1, created_at: ctx.now, created_by: ctx.actor, updated_at: ctx.now, updated_by: ctx.actor };
   const ops = [{ table: 'flight_pens', op: 'put', record, before: existing || null }];
   if (initial > 0) {
     ops.push({ table: 'stock_movements', op: 'put', before: null, record: countMovement({ stock_movements: [] }, { penId: record.id, counted: initial, origin: (input.origin || '').trim() }, ctx) });
@@ -194,6 +205,8 @@ export function penHasData(db, penId) {
   return db.stock_movements.some((m) => m.from_pen_id === penId || m.to_pen_id === penId)
     || (db.health_cases || []).some((h) => h.pen_id === penId)
     || (db.brood_events || []).some((e) => e.to_pen_id === penId)
+    || (db.birds || []).some((b) => b.pen_id === penId || b.source_pen_id === penId)
+    || (db.bird_events || []).some((e) => e.from_pen_id === penId || e.to_pen_id === penId)
     || (db.orders || []).some((o) => (o.items || []).some((it) => it.pen_id === penId));
 }
 

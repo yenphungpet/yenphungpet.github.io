@@ -518,3 +518,19 @@ button.link { background: none; border: 0; padding: 0 2px; color: var(--teal-600
   .sc-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sc-actions [data-act="today"] { grid-column: 1 / -1; }
 }
+
+/* V2.2.3 Chim giống: hàng chim (mở hồ sơ + bút chì + Chuyển / Ghép), lồng giống, bộ lọc, lịch sử */
+.bird-row { align-items: center; gap: 6px; }
+.bird-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.bird-main .grow { min-width: 0; overflow-wrap: anywhere; }
+.bird-acts { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+.bird-acts .btn { min-height: 40px; white-space: nowrap; }
+.bp-card .row { align-items: center; }
+.bp-card .row > a.grow { color: inherit; text-decoration: none; min-width: 0; }
+.bp-n { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--teal-700); min-width: 28px; text-align: right; }
+.bf-filter summary { font-weight: 600; cursor: pointer; min-height: 40px; display: flex; align-items: center; }
+.bf-filter .form { margin-top: 8px; }
+.sel-rows, .act-list, .tl { display: flex; flex-direction: column; gap: 8px; }
+.act-list .btn { min-height: 48px; justify-content: flex-start; }
+.pick-birds { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.pick-birds legend { font-weight: 600; font-size: 14px; margin-bottom: 6px; }

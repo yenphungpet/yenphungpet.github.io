@@ -2,7 +2,7 @@ import { html, raw, esc } from '../ui/html.js';
 import { icon } from '../ui/icons.js';
 import { cageArt } from '../ui/brand.js';
 import { openSheet, field, options, showMessages, formValues, busy, toast, confirmDialog, empty, badge } from '../ui/components.js';
-import { MOVEMENT_TYPES, ORIGIN_LABELS, PEN_NAME_MAX, penBalance, penLedger, penSummary, planMovement, planDeleteMovement, planPenCount, planOrigin, planPenSave, penHasData } from '../domain/stock.js';
+import { flightPens, MOVEMENT_TYPES, ORIGIN_LABELS, PEN_NAME_MAX, penBalance, penLedger, penSummary, planMovement, planDeleteMovement, planPenCount, planOrigin, planPenSave, penHasData } from '../domain/stock.js';
 import { currentPair, byCageCode, clutchSummary, movedToPens, clutchTitle } from '../domain/breeding.js';
 import { newRequestId } from '../domain/brood.js';
 import { fmtDate, fmtDateTime } from '../core/dates.js';
@@ -19,7 +19,7 @@ const ACTIONS = [
   ['loss', 'Hao hụt', 'minus', 'soft'],
 ];
 
-function pens(store) { return store.db.flight_pens.filter((p) => !p.archived).sort((a, b) => (a.sort || 0) - (b.sort || 0)); }
+function pens(store) { return flightPens(store.db); }
 
 export function render(app) {
   const s = app.store;
@@ -27,7 +27,7 @@ export function render(app) {
   const total = list.reduce((a, p) => a + penBalance(s.db.stock_movements, p.id), 0);
   const canW = s.can('stock.write');
   const canPen = s.can('settings.write');
-  const archived = canPen ? s.db.flight_pens.filter((p) => p.archived).sort((a, b) => penBalance(s.db.stock_movements, b.id) - penBalance(s.db.stock_movements, a.id) || a.name.localeCompare(b.name)) : [];
+  const archived = canPen ? flightPens(s.db, true).sort((a, b) => penBalance(s.db.stock_movements, b.id) - penBalance(s.db.stock_movements, a.id) || a.name.localeCompare(b.name)) : [];
   return {
     html: html`
       <div class="page-head"><div class="grow"><h1>Lồng phóng</h1><div class="sub">Quản lý theo số lượng · tổng ${total} con</div></div>
@@ -178,14 +178,15 @@ async function deletePen(app, id) {
 }
 
 /** Thêm / sửa lồng, ngừng sử dụng, xoá. Thuộc quyền chủ trại, như Thêm lồng sinh sản. */
-export function openPenForm(app, id) {
+export function openPenForm(app, id, opts = {}) {
   const s = app.store; const p = id ? s.byId('flight_pens', id) : null;
+  const breeder = (p?.kind || opts.kind) === 'breeder'; // V2.2.3: lồng giống dùng chung form, không có số chim ban đầu (đếm theo hồ sơ)
   openSheet({
-    title: p ? `Sửa ${p.name}` : 'Thêm lồng phóng',
+    title: p ? `Sửa ${p.name}` : breeder ? 'Thêm lồng giống' : 'Thêm lồng phóng',
     body: html`<form class="form" data-f novalidate>
       ${field('Tên lồng *', html`<input name="name" maxlength="${PEN_NAME_MAX}" value="${p?.name || ''}" required>`)}
       ${field('Mục đích / ghi chú', html`<input name="purpose" maxlength="120" value="${p?.purpose || ''}" placeholder="VD: Chim tơ để bán">`)}
-      ${p ? '' : html`${field('Số chim hiện có (tuỳ chọn)', html`<input type="number" name="initial" min="0" step="1" inputmode="numeric" placeholder="0">`, `Khi chưa biết nguồn gốc, nhập số đếm được. Nguồn gốc sẽ ghi "${ORIGIN_LABELS.unknown}".`)}
+      ${p || breeder ? '' : html`${field('Số chim hiện có (tuỳ chọn)', html`<input type="number" name="initial" min="0" step="1" inputmode="numeric" placeholder="0">`, `Khi chưa biết nguồn gốc, nhập số đếm được. Nguồn gốc sẽ ghi "${ORIGIN_LABELS.unknown}".`)}
       ${field('Nguồn gốc (nếu biết)', html`<input name="origin" maxlength="300">`)}`}
       <div class="form-msg" data-msg></div></form>`,
     footer: html`${p ? html`${penHasData(s.db, id) ? '' : html`<button class="btn ghost" data-del aria-label="Xoá vĩnh viễn">${icon('trash')}</button>`}<button class="btn ghost" data-archive>Ngừng sử dụng</button>` : html`<button class="btn ghost" data-close>Huỷ</button>`}<button class="btn primary" data-save>${icon('check')} Lưu</button>`,
@@ -193,11 +194,11 @@ export function openPenForm(app, id) {
       const msg = el.querySelector('[data-msg]');
       const save = async (extra) => {
         const v = formValues(el.querySelector('[data-f]'));
-        const r = await s.run(planPenSave(s.db, { ...v, id, archived: p?.archived, ...extra }, s.ctx()), { requires: 'settings.write' });
+        const r = await s.run(planPenSave(s.db, { ...v, id, kind: breeder ? 'breeder' : 'flight', archived: p?.archived, ...extra }, s.ctx()), { requires: 'settings.write' });
         if (!r.ok) { showMessages(msg, r.errors); return false; }
         return true;
       };
-      el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => { if (await save()) { toast('Đã lưu lồng phóng'); close(); } }));
+      el.querySelector('[data-save]').addEventListener('click', (e) => busy(e.currentTarget, async () => { if (await save()) { toast(breeder ? 'Đã lưu lồng giống' : 'Đã lưu lồng phóng'); close(); } }));
       el.querySelector('[data-archive]')?.addEventListener('click', async () => {
         if (!(await confirmDialog(`Ngừng sử dụng ${p.name}? Lồng được ẩn, lịch sử giữ nguyên, có thể dùng lại sau.`, { ok: 'Ngừng sử dụng' }))) return;
         if (await save({ archived: true })) { toast(`Đã ngừng sử dụng ${p.name}`); close(); }

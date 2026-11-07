@@ -6,7 +6,7 @@
 
 import { isISODate } from '../core/dates.js';
 import { uid } from '../core/ids.js';
-import { findNegative, penBalance } from './stock.js';
+import { findNegative, flightPens, penBalance } from './stock.js';
 
 export const ORDER_STATUS = {
   draft: 'Nháp / báo giá',
@@ -75,7 +75,7 @@ export function validateOrder(order, db) {
     const n = `Dòng ${i + 1}`;
     if (!Number.isInteger(Number(it.qty)) || Number(it.qty) <= 0) errors.push(`${n}: số lượng phải là số nguyên > 0`);
     if (!(Number(it.unit_price) >= 0)) errors.push(`${n}: giá bán không hợp lệ`);
-    if (it.kind === 'pen' && !db.flight_pens.some((p) => p.id === it.pen_id)) errors.push(`${n}: chọn lồng phóng xuất chim`);
+    if (it.kind === 'pen' && !flightPens(db, null).some((p) => p.id === it.pen_id)) errors.push(`${n}: chọn lồng phóng xuất chim`);
     if (it.kind === 'breeder') {
       const b = db.birds.find((x) => x.id === it.bird_id);
       if (!b) errors.push(`${n}: chọn cá thể chim giống`);

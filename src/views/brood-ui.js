@@ -6,6 +6,7 @@ import { icon } from '../ui/icons.js';
 import { openSheet, field, options, showMessages, formValues, busy, toast, badge, empty } from '../ui/components.js';
 import { fmtDate, fmtDateShort, fmtDateTime, addDays } from '../core/dates.js';
 import { byCageCode, clutchTitle } from '../domain/breeding.js';
+import { flightPens } from '../domain/stock.js';
 import {
   cageBrood, planTransfer, newRequestId, ageInfo, stageOf, BROOD_STAGES, STAGE_DISCLAIMER, EGG_CHECK_LABELS, LOSS_REASONS, EVENT_LABELS,
   KIND_LABELS, originText, groupLineage, groupPath, cageEvents, eventText, reverseCheck, clutchHatchRange, INCUBATION_DAYS, BACKDATE_DAYS, backdatedDays,
@@ -277,7 +278,7 @@ export function openGroupAction(app, groupId, type) {
   const cage = store.byId('cages', g.cage_id);
   const requestId = newRequestId();
   const T = { hatch: ['Ghi nở', `Nhóm ${g.qty} trứng ở ${cage.code}`], loss: ['Ghi hao hụt', `Nhóm ${g.qty} ${KIND_LABELS[g.kind]} ở ${cage.code}`], fledge: ['Ra ràng → lồng phóng', `Nhóm ${g.qty} chim non ở ${cage.code}`] }[type];
-  const pens = store.db.flight_pens.filter((p) => !p.archived).map((p) => [p.id, p.name]);
+  const pens = flightPens(store.db).map((p) => [p.id, p.name]);
   openSheet({
     title: T[0], subtitle: T[1],
     body: html`<form class="form" data-ga novalidate>

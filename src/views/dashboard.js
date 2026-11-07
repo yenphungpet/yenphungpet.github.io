@@ -33,7 +33,7 @@ export function render(app) {
       ${statTile('Chim non đang có', m.chicks, { tone: 'green', href: '#/cages?f=rearing', def: METRIC_DEFS.chicks, sub: 'trong tổ sinh sản' })}
       ${statTile('Chim lồng phóng', m.penTotal, { href: '#/pens', def: METRIC_DEFS.penTotal, sub: `${m.pens.length} lồng đang dùng${m.penOriginUnknown ? ` · ${m.penOriginUnknown} con chưa rõ nguồn gốc` : ''}` })}
       ${statTile('Chim có thể bán', m.saleable.known ? m.saleable.qty : '—', { def: METRIC_DEFS.saleable, sub: m.saleable.known ? 'đã xác nhận đủ điều kiện' : 'Chưa xác định' })}
-      ${statTile('Chim giống', m.breeders.total, { tone: 'gold', href: '#/breeders', def: METRIC_DEFS.breederTotal, sub: `${m.breeders.paired} đang ghép · ${m.breeders.inBreederPen} ở Lồng Chim Giống` })}
+      ${statTile('Chim giống', m.breeders.total, { tone: 'gold', href: '#/breeders', def: METRIC_DEFS.breederTotal, sub: `${m.breeders.inBreederPen} ở khu giống · ${m.breeders.paired} đang ghép ở lồng SS` })}
     </div>
     <p class="def">Cách tính: trứng đang có = trứng đã đẻ − đã nở − hỏng − không cồ − đã chuyển đi, của mọi lứa đang mở, cộng nhóm trứng nhận từ lồng khác; khớp tổng ô Trứng trên thẻ lồng. Chim non chỉ tính chim còn trong tổ; chim đã ra lồng phóng tính ở lồng phóng, không cộng trùng. Chuyển giữa các lồng phóng không đổi tổng. Chim có thể bán chỉ tính chim đã xác nhận đủ điều kiện, không suy từ số chim lồng phóng. Mỗi chim giống đếm một lần.</p>
 

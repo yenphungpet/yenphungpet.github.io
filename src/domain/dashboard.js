@@ -4,7 +4,7 @@
 //  - Chim giống đã ghép đang nằm trong lồng sinh sản KHÔNG được tính vào "Lồng Chim Giống".
 
 import { cageState, DEFAULT_SETTINGS } from './breeding.js';
-import { penBalance, penSummary } from './stock.js';
+import { flightPens, penBalance, penSummary } from './stock.js';
 import { breederStats, birdAnomalies } from './breeders.js';
 import { summarize, filterTx } from './finance.js';
 import { debtSummary, salesRevenue } from './sales.js';
@@ -21,7 +21,7 @@ export const METRIC_DEFS = {
   pen: 'Tồn hiện tại theo sổ biến động của lồng phóng.',
   penTotal: 'Tổng chim ở các lồng phóng đang sử dụng theo sổ biến động, gồm cả chim đã kiểm kê nhưng chưa rõ nguồn gốc. Chuyển giữa các lồng phóng không làm đổi tổng. Không cộng lồng đã ngừng sử dụng.',
   saleable: 'Chỉ tính chim đã được xác nhận đủ điều kiện bán. Hiện hệ thống chưa có dữ liệu xác nhận này nên hiển thị "Chưa xác định", không tự suy từ số chim lồng phóng.',
-  breederTotal: 'Số cá thể chim giống còn sống, thuộc trại. Mỗi cá thể đếm một lần dù từng ghép nhiều cặp hay nhiều lồng. Không tính chim ở lồng đã lưu trữ.',
+  breederTotal: 'Số cá thể chim giống còn sống, thuộc trại = ở khu giống + đang ghép ở lồng sinh sản + cách ly + ngưng sử dụng. Mỗi cá thể đếm một lần dù từng ghép nhiều cặp hay nhiều lồng. Chim tuyển từ lồng phóng đã trừ khỏi lồng phóng; chim trả về lồng phóng tính ở lồng phóng. Không tính chim ở lồng đã lưu trữ.',
   breederPen: 'Số cá thể đang ở Lồng Chim Giống (trạng thái “Trong Lồng Chim Giống”). Không gồm chim đang ghép — số “đang ghép ở lồng SS” bên dưới là bố mẹ thuộc cặp đang mở của lồng sinh sản đang dùng (2 con mỗi cặp).',
   checks: 'Đối chiếu tự động, không sửa dữ liệu: ra ràng ↔ nhập lồng phóng, đã nở ≠ chim non hiện tại + ra ràng (cần đối chiếu — không tự suy ra chết/mất), trứng chờ quá lâu, nhật ký mâu thuẫn, số cộng dồn giảm, trạng thái chim lệch với cặp ghép.',
 };
@@ -34,7 +34,7 @@ const groupSum = (db, states, kind) => {
 export function dashboardMetrics(db, today, settings = DEFAULT_SETTINGS) {
   const cages = db.cages.filter((c) => !c.archived && !c.deleted);
   const states = cages.map((c) => cageState(c, db, today, settings));
-  const pens = db.flight_pens.filter((p) => !p.archived).sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  const pens = flightPens(db); // lồng giống đếm theo hồ sơ chim (Chim giống), không cộng vào lồng phóng
   const monthPrefix = today.slice(0, 7);
   const monthTx = filterTx(db.transactions, { from: `${monthPrefix}-01`, to: `${monthPrefix}-31` });
   const metrics = {
@@ -70,7 +70,7 @@ export function dashboardMetrics(db, today, settings = DEFAULT_SETTINGS) {
 
 /** Lồng đã ngừng sử dụng nhưng sổ còn số chim: không cộng vào tổng, báo riêng để đối soát. Không tự đổi số. */
 export function penReconcile(db) {
-  const rows = db.flight_pens.filter((p) => p.archived).map((p) => ({ pen: p, qty: penBalance(db.stock_movements, p.id) })).filter((x) => x.qty !== 0);
+  const rows = flightPens(db, true).map((p) => ({ pen: p, qty: penBalance(db.stock_movements, p.id) })).filter((x) => x.qty !== 0);
   return { pens: rows.length, qty: rows.reduce((a, x) => a + x.qty, 0) };
 }
 

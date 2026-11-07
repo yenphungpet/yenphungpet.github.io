@@ -11,6 +11,7 @@ export const BIRD_STATUS = {
   retired: 'Ngưng sử dụng',
   sold: 'Đã bán',
   dead: 'Đã chết',
+  released: 'Đã trả về lồng phóng', // V2.2.3: không còn là chim giống, đã cộng lại vào sổ lồng phóng
 };
 export const ALIVE_OWNED = new Set(['holding', 'paired', 'isolated', 'retired']);
 

@@ -8,6 +8,7 @@ import { cageArt } from '../ui/brand.js';
 import { fmtDate, fmtDateShort, fmtDateTime, relativeDays, addDays, daysBetween } from '../core/dates.js';
 import { CAGE_STATUS_LABELS, clutchTitle } from '../domain/breeding.js';
 import { cageBrood, cageEvents, chickLimit, KIND_LABELS, LOSS_REASONS, newRequestId, originText, BACKDATE_DAYS } from '../domain/brood.js';
+import { flightPens } from '../domain/stock.js';
 import {
   fosterState, eggBreakdown, progressBars, lossSummary, clutchQuality, needsCheck, smartSort, checkCounter, planQuickAdd,
   EGG_MIN_DAYS, EGG_MAX_DAYS, CHICK_SCALE_DAYS,
@@ -242,7 +243,7 @@ export function openClutchFledge(app, clutchId) {
   const part = broodOf(app, c.cage_id).parts.find((p) => p.clutch.id === clutchId);
   const max = part?.own?.chicks || 0;
   if (!max) { toast('Lứa không còn chim non', 'warn'); return; }
-  const pens = store.db.flight_pens.filter((p) => !p.archived).sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  const pens = flightPens(store.db);
   if (!pens.length) { toast('Chưa có lồng phóng đang sử dụng', 'warn'); return; }
   const requestId = newRequestId();
   openSheet({

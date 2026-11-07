@@ -8,6 +8,8 @@ import { penBalance } from '../domain/stock.js';
 import { fmtDate } from '../core/dates.js';
 import { matches } from '../core/format.js';
 import { uid } from '../core/ids.js';
+import { renderArea, openSelectToArea, openAreaActions, openBirdHistory, timelineHtml, birdWhere } from './breeder-area.js';
+import { breederPens, planSaveBird } from '../domain/breeder-area.js';
 
 const STATUS_TONE = { holding: 'ok', paired: 'info', isolated: 'danger', retired: 'muted', sold: 'muted', dead: 'muted' };
 const FILTERS = [['current', 'Hiện tại'], ['holding', 'Trong Lồng Giống'], ['paired', 'Đã ghép'], ['male', 'Trống'], ['female', 'Mái'], ['unknown', 'Chưa rõ giới'], ['past', 'Đã bán/chết/ngưng']];
@@ -26,7 +28,12 @@ function birdRow(s, b) {
     <span class="desc">${SEX_LABEL[b.sex || 'unknown']}${b.sex !== 'unknown' && b.sex_confidence ? ` (${b.sex_confidence === 'dna' || b.sex_confidence === 'confirmed' ? 'đã xác minh' : 'chưa xác minh'})` : ''} · ${b.phenotype || b.mutation || 'chưa ghi màu'}${b.selected_date ? ` · tuyển ${fmtDate(b.selected_date)}` : ''}</span></span>${icon('chevron')}</a>`;
 }
 
-export function renderList(app, _p, query) {
+/** V2.2.3: database có 0016 ⇒ màn hình khu giống mới; chưa có ⇒ giữ màn hình V2.2.2. */
+export function renderList(app, p, query) {
+  return app.store.breederArea ? renderArea(app, p, query) : legacyList(app, p, query);
+}
+
+function legacyList(app, _p, query) {
   const s = app.store;
   const st = breederStats(s.db.birds, s.db);
   const place = birdPlacement(s.db);
@@ -82,10 +89,12 @@ export function renderProfile(app, { id }) {
   const comp = pedigreeCompleteness(s.db.birds, id, 2);
   const originClutch = b.origin_clutch_id ? s.byId('clutches', b.origin_clutch_id) : null;
   const originCage = b.origin_cage_id ? s.byId('cages', b.origin_cage_id) : null;
+  const area = s.breederArea;
   return {
     html: html`
       <div class="page-head"><a class="back" href="#/breeders">${icon('back')}</a><div class="grow"><h1>${b.ring_code}</h1><div class="sub">${BIRD_STATUS[b.status]}</div></div>
         ${s.can('breeders.write') ? html`<button class="btn soft sm" data-edit>${icon('edit')} Sửa</button>` : ''}</div>
+      ${area ? html`<div class="btn-row" style="margin-bottom:12px">${s.can('breeders.write') && b.status === 'holding' && !birdPlacement(s.db).activePaired.has(b.id) ? html`<button class="btn primary" data-act>${icon('swap')} Chuyển / Ghép cặp</button>` : ''}<button class="btn soft" data-hist>${icon('history')} Lịch sử</button></div>` : ''}
       ${b.photo_ids?.length ? html`<div class="thumbs" style="margin-bottom:12px">${b.photo_ids.map((p) => thumb(p))}</div>` : ''}
       <div class="card"><dl class="kv">
         <dt>Mã / số vòng chân</dt><dd>${b.ring_code}</dd>
@@ -97,6 +106,8 @@ export function renderProfile(app, { id }) {
         <dt>Lồng sinh sản gốc</dt><dd>${originCage ? html`<a href="#/cage/${originCage.id}">${originCage.code}</a>` : '—'}</dd>
         <dt>Lứa gốc</dt><dd>${originClutch ? html`<a href="#/clutch/${originClutch.id}">${originClutch.code}</a>` : '—'}</dd>
         <dt>Trạng thái</dt><dd>${BIRD_STATUS[b.status]}</dd>
+        ${area ? html`<dt>Đang ở</dt><dd>${birdWhere(s, b, birdPlacement(s.db))}</dd>
+        <dt>Lồng phóng nguồn</dt><dd>${s.byId('flight_pens', b.source_pen_id)?.name || 'Chưa xác định'}</dd>` : ''}
         <dt>Ghi chú</dt><dd style="white-space:pre-wrap">${b.note || '—'}</dd></dl></div>
       <div class="section"><h2>Phả hệ</h2><span class="small muted">Đủ ${comp.known}/${comp.total} tổ tiên (2 đời)</span></div>
       <div class="grid2">${pedigreeNode(s, b.father_id, 'Bố')}${pedigreeNode(s, b.mother_id, 'Mẹ')}
@@ -105,8 +116,13 @@ export function renderProfile(app, { id }) {
       <div class="btn-row" style="margin-top:10px"><a class="btn soft" href="#/kinship?a=${b.id}">${icon('dna')} Kiểm tra huyết thống với cá thể khác</a></div>
       ${pairs.length ? html`<div class="section"><h2>Lịch sử ghép cặp</h2></div><div class="card"><div class="list">${pairs.map((p) => html`<a class="row" href="#/cage/${p.cage_id}"><span class="grow"><span class="title">${s.byId('cages', p.cage_id)?.code}</span> · với ${s.birdName(p.male_id === id ? p.female_id : p.male_id)}<br>
         <span class="desc">${fmtDate(p.start_date)} → ${p.end_date ? fmtDate(p.end_date) : 'hiện tại'} · ${clutches.filter((c) => c.pair_id === p.id).length} lứa</span></span>${icon('chevron')}</a>`)}</div></div>` : ''}
-      ${kids.length ? html`<div class="section"><h2>Con đã tuyển làm giống</h2></div><div class="card"><div class="list">${kids.map((k) => birdRow(s, k))}</div></div>` : ''}`,
-    mount(root) { root.querySelector('[data-edit]')?.addEventListener('click', () => openBirdForm(app, id)); },
+      ${kids.length ? html`<div class="section"><h2>Con đã tuyển làm giống</h2></div><div class="card"><div class="list">${kids.map((k) => birdRow(s, k))}</div></div>` : ''}
+      ${area ? html`<div class="section"><h2>Lịch sử chuyển</h2></div>${timelineHtml(s, id)}` : ''}`,
+    mount(root) {
+      root.querySelector('[data-edit]')?.addEventListener('click', () => openBirdForm(app, id));
+      root.querySelector('[data-act]')?.addEventListener('click', () => openAreaActions(app, id));
+      root.querySelector('[data-hist]')?.addEventListener('click', () => openBirdHistory(app, id));
+    },
   };
 }
 
@@ -132,8 +148,10 @@ export function openBirdForm(app, id, opts = {}) {
       <div class="grid2">${field('Bố', birdSelect(s, 'father_id', b?.father_id, (x) => x.id !== id && x.sex !== 'female'))}
         ${field('Mẹ', birdSelect(s, 'mother_id', b?.mother_id, (x) => x.id !== id && x.sex !== 'male'))}</div>
       <div class="grid2">${field('Nguồn gốc', html`<select name="origin">${options({ farm: 'Sinh tại trại', purchased: 'Mua / nhận về' }, b?.origin || 'purchased')}</select>`)}
-        ${field('Trạng thái', html`<select name="status">${options(b?.status === 'paired' || b?.status === 'sold' ? { [b.status]: BIRD_STATUS[b.status] } : { holding: BIRD_STATUS.holding, isolated: BIRD_STATUS.isolated, retired: BIRD_STATUS.retired, dead: BIRD_STATUS.dead }, b?.status || 'holding')}</select>`,
+        ${field('Trạng thái', html`<select name="status">${options(['paired', 'sold', 'released'].includes(b?.status) ? { [b.status]: BIRD_STATUS[b.status] } : { holding: BIRD_STATUS.holding, isolated: BIRD_STATUS.isolated, retired: BIRD_STATUS.retired, dead: BIRD_STATUS.dead }, b?.status || 'holding')}</select>`,
           b?.status === 'paired' ? 'Đang ghép: đổi qua chức năng Thay trống/mái của lồng' : b?.status === 'sold' ? 'Đã bán: đổi qua đơn hàng' : '')}</div>
+      ${s.breederArea && (!b || b._new) ? field('Vào lồng giống', html`<select name="pen_id">${options({ ...Object.fromEntries(breederPens(s.db).map((p) => [p.id, p.name])), '': 'Chưa xếp lồng' }, breederPens(s.db)[0]?.id || '')}</select>`, 'Chỉ áp dụng khi trạng thái là "Trong Lồng Chim Giống"') : ''}
+      ${s.breederArea && b && !b._new ? html`<p class="small muted">Đang ở: ${birdWhere(s, b, birdPlacement(s.db))} · Lồng phóng nguồn: ${s.byId('flight_pens', b.source_pen_id)?.name || 'chưa xác định'}. Đổi lồng: dùng "Chuyển / Ghép cặp".</p>` : ''}
       ${field('Ghi chú', html`<textarea name="note" rows="2">${b?.note || ''}</textarea>`)}
       <div class="field"><span>Ảnh</span>${photoPickerHtml(b?.photo_ids || [])}</div>
       <div class="form-msg" data-msg></div></form>`,
@@ -154,6 +172,17 @@ export function openBirdForm(app, id, opts = {}) {
         const errs = validateBird(rec, s.db.birds);
         if (errs.length) return showMessages(msg, errs);
         delete rec._new;
+        if (s.breederArea) {
+          const old = b && !b._new ? b : null;
+          const plan = planSaveBird(s.db, old ? rec : { ...rec, pen_id: v.pen_id || null }, old, s.ctx());
+          if (plan.errors.length) return showMessages(msg, plan.errors);
+          const r2 = await s.run(plan, { requires: 'breeders.write' });
+          if (!r2.ok) return showMessages(msg, r2.errors);
+          toast('Đã lưu hồ sơ'); close();
+          opts.onSaved?.(plan.record);
+          if ((!b || b._new) && !opts.stay) app.navigate(`#/bird/${rec.id}`);
+          return;
+        }
         const r = await s.run({ ops: [{ table: 'birds', op: 'put', record: rec, before: b && !b._new ? b : null }] }, { requires: 'breeders.write' });
         if (!r.ok) return showMessages(msg, r.errors);
         toast('Đã lưu hồ sơ'); close();
@@ -166,6 +195,7 @@ export function openBirdForm(app, id, opts = {}) {
 
 /** Tuyển chim từ lồng phóng làm giống: nhập danh sách cá thể (mỗi dòng 1 con). */
 export function openSelectBreeders(app, penId) {
+  if (app.store.breederArea) return openSelectToArea(app, penId);
   const s = app.store;
   const pens = s.db.flight_pens.filter((p) => !p.archived);
   const clutches = s.db.clutches.filter((c) => !c.deleted).sort((a, b) => b.start_date.localeCompare(a.start_date));
